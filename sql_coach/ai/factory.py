@@ -2,12 +2,19 @@
 """AI engine factory."""
 from ..models import Config
 from .base import AIEngine
-from .deepseek import DeepSeekEngine
 
 
 def create_ai_engine(model: str, config: Config) -> AIEngine:
-    """Create an AI engine based on model name."""
+    """Create an AI engine based on model name.
+
+    In mock mode, returns MockAIEngine to avoid real API calls.
+    """
+    if config.mock:
+        from .mock import MockAIEngine
+        return MockAIEngine()
+
     if model == "deepseek":
+        from .deepseek import DeepSeekEngine
         return DeepSeekEngine(api_key=config.deepseek_api_key)
     elif model == "openai":
         from .openai_adapter import OpenAIEngine

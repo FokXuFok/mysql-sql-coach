@@ -255,3 +255,36 @@ def test_ollama_analyze_handles_api_failure(sample_sql_info, sample_explain_resu
     assert result.optimized_sql == sample_sql_info.raw_sql
     assert len(result.problems) == 1
     assert result.problems[0].severity == "critical"
+
+
+
+# MockAIEngine tests
+def test_mock_engine_name():
+    from sql_coach.ai.mock import MockAIEngine
+    engine = MockAIEngine()
+    assert engine.name() == "mock"
+
+
+def test_mock_engine_analyze_returns_result(sample_sql_info):
+    from sql_coach.ai.mock import MockAIEngine
+    engine = MockAIEngine()
+    result = engine.analyze(sample_sql_info, None)
+    assert isinstance(result, AnalysisResult)
+    # SELECT * with WHERE -> should suggest optimization
+    assert len(result.problems) >= 1
+    assert result.optimized_sql  # non-empty
+
+
+def test_factory_returns_mock_in_mock_mode():
+    """Factory should return MockAIEngine when config.mock is True."""
+    from sql_coach.models import Config, DBConfig
+    from sql_coach.ai.factory import create_ai_engine
+    from sql_coach.ai.mock import MockAIEngine
+    db = DBConfig(host="localhost", port=3306, user="root",
+                  password="x", database="test")
+    config = Config(db=db, model="deepseek",
+                    deepseek_api_key="", openai_api_key="",
+                    ollama_url="http://localhost:11434",
+                    benchmark_runs=3, mock=True)
+    engine = create_ai_engine("deepseek", config)
+    assert isinstance(engine, MockAIEngine)
