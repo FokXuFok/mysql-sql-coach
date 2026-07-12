@@ -63,13 +63,31 @@ def parse_explain_json(explain_json_str: str) -> ExplainResult:
                 process_table(node["table"])
             if "ordering_operation" in node:
                 op = node["ordering_operation"]
+                # Extract using_filesort/using_temporary_table flags
+                filesort = op.get("using_filesort", False)
+                temporary = op.get("using_temporary_table", False)
+                # Process direct table if exists, injecting flags
                 if "table" in op:
                     table_data = dict(op["table"])
-                    if op.get("using_filesort"):
+                    if filesort:
                         table_data["using_filesort"] = True
-                    if op.get("using_temporary_table"):
+                    if temporary:
                         table_data["using_temporary_table"] = True
                     process_table(table_data)
+                # Recurse into nested structures (but skip the already-processed table)
+                for key, value in op.items():
+                    if key in ("table", "using_filesort", "using_temporary_table"):
+                        continue
+                    walk(value)
+            if "grouping_operation" in node:
+                # Handle GROUP BY blocks similarly
+                op = node["grouping_operation"]
+                if "table" in op:
+                    process_table(op["table"])
+                for key, value in op.items():
+                    if key == "table":
+                        continue
+                    walk(value)
             if "nested_loop" in node:
                 for item in node["nested_loop"]:
                     walk(item)

@@ -111,3 +111,49 @@ def test_parse_explain_with_filesort():
     }
     result = parse_explain_json(json.dumps(explain_json))
     assert "filesort" in result.rows[0].extra.lower()
+
+
+def test_parse_explain_orderby_with_join():
+    """Test EXPLAIN with ORDER BY and JOIN (nested in ordering_operation)."""
+    explain_json = {
+        "query_block": {
+            "select_id": 1,
+            "ordering_operation": {
+                "using_filesort": True,
+                "nested_loop": [
+                    {"table": {"table_name": "orders", "access_type": "ALL",
+                               "rows_examined_per_scan": 1000}},
+                    {"table": {"table_name": "users", "access_type": "eq_ref",
+                               "key": "PRIMARY", "rows_examined_per_scan": 1}},
+                ]
+            }
+        }
+    }
+    result = parse_explain_json(json.dumps(explain_json))
+    assert len(result.rows) == 2
+    assert result.rows[0].table == "orders"
+    assert result.rows[1].table == "users"
+    assert result.is_full_scan is True
+
+
+def test_parse_explain_malformed_json():
+    """Test handling of malformed JSON."""
+    result = parse_explain_json("not valid json")
+    assert len(result.rows) == 0
+    assert "无法解析" in result.problems[0]
+
+
+def test_parse_explain_empty_string():
+    """Test handling of empty string."""
+    result = parse_explain_json("")
+    assert len(result.rows) == 0
+
+
+def test_run_explain_connection_error():
+    """Test run_explain handles connection errors gracefully."""
+    mock_conn = MagicMock()
+    mock_conn.cursor.side_effect = Exception("Connection lost")
+    result = run_explain(mock_conn, "SELECT 1")
+    assert len(result.rows) == 0
+    assert any("EXPLAIN" in p for p in result.problems)
+
