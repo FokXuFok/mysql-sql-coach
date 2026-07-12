@@ -3,7 +3,7 @@ import re
 from typing import List
 
 import sqlparse
-from sqlparse.sql import IdentifierList, Identifier, Where, Comparison
+from sqlparse.sql import IdentifierList, Identifier, Where
 from sqlparse.tokens import Keyword, DML
 
 from ..models import SQLInfo
@@ -33,7 +33,7 @@ def _extract_tables(stmt) -> List[str]:
                 update_seen = False
                 continue
 
-        # UPDATE <table> — UPDATE is a DML token, not a keyword
+        # UPDATE <table> - UPDATE is a DML token, not a keyword
         if token.ttype is DML and token.normalized.upper() == "UPDATE":
             update_seen = True
             continue
@@ -73,6 +73,9 @@ def _extract_columns(stmt) -> List[str]:
         if select_seen:
             if token.is_keyword and token.normalized.upper() == "FROM":
                 break
+            # Skip other keywords like DISTINCT, ALL, etc.
+            if token.is_keyword:
+                continue
             if isinstance(token, IdentifierList):
                 for identifier in token.get_identifiers():
                     columns.append(str(identifier).strip())
@@ -120,6 +123,12 @@ def _get_sql_type(stmt) -> str:
 
 def parse(sql: str) -> SQLInfo:
     """Parse a SQL string and extract structured info."""
+    if not sql or not sql.strip():
+        return SQLInfo(
+            raw_sql=sql or "", sql_type="UNKNOWN",
+            tables=[], columns=[], where_conditions=[],
+            join_tables=[], order_by=[],
+        )
     sql = sql.strip().rstrip(";")
     parsed = sqlparse.parse(sql)
     if not parsed:
@@ -138,7 +147,6 @@ def parse(sql: str) -> SQLInfo:
 
     # Identify join tables (all tables except the first one if FROM+JOIN)
     join_tables = tables[1:] if len(tables) > 1 else []
-    main_tables = tables[:1] if tables else []
 
     return SQLInfo(
         raw_sql=sql,

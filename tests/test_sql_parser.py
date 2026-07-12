@@ -59,5 +59,21 @@ def test_parse_complex_query():
     """
     info = parse(sql)
     assert info.sql_type == "SELECT"
-    assert len(info.tables) >= 1
-    assert len(info.columns) >= 2
+    assert "orders" in info.tables
+    assert "users" in info.tables
+    assert any("o.id" in c or "id" in c for c in info.columns)
+    assert any("o.amount" in c or "amount" in c for c in info.columns)
+    assert len(info.where_conditions) >= 1
+    assert len(info.order_by) >= 1
+
+
+def test_parse_empty_sql():
+    info = parse("")
+    assert info.sql_type == "UNKNOWN"
+    assert info.tables == []
+
+
+def test_parse_none_sql():
+    info = parse(None)
+    assert info.sql_type == "UNKNOWN"
+    assert info.raw_sql == ""
