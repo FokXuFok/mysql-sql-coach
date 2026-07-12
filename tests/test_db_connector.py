@@ -128,3 +128,34 @@ def test_db_connector_execute_not_connected_raises(db_config):
     conn = DBConnector(db_config)
     with pytest.raises(RuntimeError):
         conn.execute("CREATE INDEX idx ON t(c)")
+
+
+from sql_coach.db.mock import MockConnector
+
+
+def test_mock_connector_always_connected():
+    conn = MockConnector()
+    assert conn.is_connected() is True
+
+
+def test_mock_connector_explain_returns_empty():
+    conn = MockConnector()
+    result = conn.explain("SELECT * FROM t")
+    assert result.rows == []
+    assert result.is_full_scan is False
+
+
+def test_mock_connector_benchmark_returns_zero():
+    conn = MockConnector()
+    elapsed = conn.benchmark("SELECT 1")
+    assert elapsed == 0.0
+
+
+def test_mock_connector_close_no_error():
+    conn = MockConnector()
+    conn.close()  # should not raise
+
+
+def test_mock_connector_execute_no_error():
+    conn = MockConnector()
+    conn.execute("CREATE INDEX idx ON t(c)")  # should not raise
