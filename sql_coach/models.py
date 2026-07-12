@@ -76,3 +76,23 @@ class Config:
     ollama_url: str
     benchmark_runs: int
     mock: bool
+
+    @classmethod
+    def from_env(cls, mock: bool = False) -> 'Config':
+        from .config import _get_env, _get_env_int
+        db = DBConfig(
+            host=_get_env("DB_HOST", "localhost"),
+            port=_get_env_int("DB_PORT", 3306),
+            user=_get_env("DB_USER", "root"),
+            password=_get_env("DB_PASSWORD", ""),
+            database=_get_env("DB_NAME", "test"),
+        )
+        return cls(
+            db=db,
+            model=_get_env("AI_MODEL", "deepseek"),
+            deepseek_api_key=_get_env("DEEPSEEK_API_KEY"),
+            openai_api_key=_get_env("OPENAI_API_KEY"),
+            ollama_url=_get_env("OLLAMA_URL", "http://localhost:11434"),
+            benchmark_runs=_get_env_int("BENCHMARK_RUNS", 3),
+            mock=mock,
+        )
