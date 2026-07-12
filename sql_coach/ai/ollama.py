@@ -43,9 +43,9 @@ class OllamaEngine(AIEngine):
         }
 
         last_error = None
-        for attempt in range(self.max_retries):
-            try:
-                with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=60.0) as client:
+            for attempt in range(self.max_retries):
+                try:
                     response = client.post(
                         f"{self.url}/api/chat",
                         json=payload,
@@ -54,11 +54,11 @@ class OllamaEngine(AIEngine):
                     data = response.json()
                     content = data.get("message", {}).get("content", "")
                     return _parse_ai_response(content, sql_info.raw_sql)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"Ollama attempt {attempt + 1} failed: {e}")
-                if attempt < self.max_retries - 1:
-                    time.sleep(1)
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Ollama attempt {attempt + 1} failed: {e}")
+                    if attempt < self.max_retries - 1:
+                        time.sleep(1)
 
         return AnalysisResult(
             problems=[Problem(

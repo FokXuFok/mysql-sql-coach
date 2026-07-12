@@ -1,12 +1,16 @@
 # sql_coach/ai/openai_adapter.py
 """OpenAI API adapter."""
+import logging
+import time
 from typing import Optional
 
 from openai import OpenAI
 
-from ..models import SQLInfo, ExplainResult, AnalysisResult
+from ..models import SQLInfo, ExplainResult, AnalysisResult, Problem
 from .base import AIEngine
-from .deepseek import _build_user_message, _parse_ai_response
+from .deepseek import _build_user_message, _parse_ai_response, SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIEngine(AIEngine):
@@ -26,10 +30,6 @@ class OpenAIEngine(AIEngine):
         sql_info: SQLInfo,
         explain_result: Optional[ExplainResult],
     ) -> AnalysisResult:
-        import time
-        from ..models import Problem
-        from .deepseek import SYSTEM_PROMPT
-
         user_message = _build_user_message(sql_info, explain_result)
         last_error = None
 
@@ -48,6 +48,7 @@ class OpenAIEngine(AIEngine):
                 return _parse_ai_response(content, sql_info.raw_sql)
             except Exception as e:
                 last_error = e
+                logger.warning(f"OpenAI API attempt {attempt + 1} failed: {e}")
                 if attempt < self.max_retries - 1:
                     time.sleep(1)
 
