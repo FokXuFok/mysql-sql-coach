@@ -4,7 +4,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![CI](https://github.com/yourname/sql-coach/actions/workflows/ci.yml/badge.svg)](https://github.com/yourname/sql-coach/actions)
+[![CI](https://github.com/FokXuFok/mysql-sql-coach/actions/workflows/ci.yml/badge.svg)](https://github.com/FokXuFok/mysql-sql-coach/actions)
 
 SQL Coach 是一个命令行工具，输入一条 SQL，自动连接 MySQL 执行 EXPLAIN，调用 AI 大模型分析执行计划，输出优化建议、改写后的 SQL、索引 DDL，并在数据库中实测性能对比，最后让你选择使用哪个版本的 SQL（自动复制到剪贴板）。
 
