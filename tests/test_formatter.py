@@ -8,7 +8,7 @@ from sql_coach.models import (
 
 def test_format_problems_empty():
     result = format_problems([])
-    assert "未发现问题" in result or len(result) == 0
+    assert result == "未发现问题"
 
 
 def test_format_problems_with_items():
@@ -46,7 +46,7 @@ def test_format_report_basic():
     output = format_report(sql_info, explain, analysis, None)
     assert "SELECT * FROM orders" in output
     assert "ALL" in output
-    assert "optimized_sql" in output.lower() or "优化" in output
+    assert "SELECT id FROM orders FORCE INDEX" in output
     assert "CREATE INDEX" in output
 
 
@@ -72,3 +72,26 @@ def test_format_report_with_benchmark():
     assert "2.31" in output
     assert "0.04" in output
     assert "57" in output
+
+
+def test_format_report_with_inf_speedup():
+    """Test report handles infinite speedup."""
+    sql_info = SQLInfo(
+        raw_sql="SELECT * FROM t", sql_type="SELECT",
+        tables=["t"], columns=["*"], where_conditions=[],
+        join_tables=[], order_by=[],
+    )
+    explain = ExplainResult(
+        rows=[], is_full_scan=False, missing_indexes=[], problems=[]
+    )
+    analysis = AnalysisResult(
+        problems=[], optimized_sql="SELECT id FROM t",
+        index_ddls=[], explanation="ok",
+    )
+    benchmark = BenchmarkResult(
+        original_time=2.0, optimized_time=0.0,
+        speedup=float("inf"), original_rows=1000, optimized_rows=10,
+    )
+
+    output = format_report(sql_info, explain, analysis, benchmark)
+    assert "无限大" in output or "inf" in output.lower()

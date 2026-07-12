@@ -1,5 +1,6 @@
 # sql_coach/report/formatter.py
 """Report formatter using Rich."""
+from io import StringIO
 from typing import Optional
 
 from rich.console import Console
@@ -10,8 +11,6 @@ from rich.text import Text
 from ..models import (
     SQLInfo, ExplainResult, AnalysisResult, BenchmarkResult, Problem
 )
-
-console = Console()
 
 SEVERITY_ICONS = {
     "critical": "🔴",
@@ -28,7 +27,7 @@ def format_problems(problems: list[Problem]) -> str:
     lines = []
     for p in problems:
         icon = SEVERITY_ICONS.get(p.severity, "•")
-        lines.append(f"  {icon} [{p.severity}] {p.table}: {p.description}")
+        lines.append(f"  {icon} ({p.severity}) {p.table}: {p.description}")
         if p.suggestion:
             lines.append(f"      → {p.suggestion}")
     return "\n".join(lines)
@@ -65,8 +64,6 @@ def format_report(
     benchmark: Optional[BenchmarkResult],
 ) -> str:
     """Format full report and return as string."""
-    from io import StringIO
-
     buffer = StringIO()
     buf_console = Console(file=buffer, width=100)
 
