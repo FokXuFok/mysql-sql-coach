@@ -119,3 +119,44 @@ def test_coach_close(mock_config):
         coach = SQLCoach(mock_config)
         coach.close()
         assert mock_db.close.called
+
+
+
+def test_end_to_end_mock_mode():
+    """End-to-end test in mock mode (no real DB/AI required)."""
+    import json
+    from sql_coach.coach import SQLCoach
+    from sql_coach.models import Config, DBConfig
+    from unittest.mock import patch, MagicMock
+
+    db = DBConfig(host="localhost", port=3306, user="root",
+                  password="x", database="test")
+    config = Config(db=db, model="deepseek",
+                    deepseek_api_key="sk-test", openai_api_key="",
+                    ollama_url="http://localhost:11434",
+                    benchmark_runs=2, mock=True)
+
+    mock_ai_response = MagicMock()
+    mock_ai_response.choices = [MagicMock()]
+    mock_ai_response.choices[0].message.content = json.dumps({
+        "problems": [
+            {"severity": "warning", "table": "orders",
+             "description": "SELECT *", "suggestion": "specify columns"}
+        ],
+        "optimized_sql": "SELECT id FROM orders WHERE status='pending'",
+        "index_ddls": [],
+        "explanation": "建议指定列名",
+    })
+
+    with patch("sql_coach.ai.deepseek.OpenAI") as mock_openai:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_ai_response
+        mock_openai.return_value = mock_client
+
+        coach = SQLCoach(config)
+        report = coach.analyze("SELECT * FROM orders WHERE status='pending'")
+
+    assert report.sql_info.sql_type == "SELECT"
+    assert report.analysis.optimized_sql == "SELECT id FROM orders WHERE status='pending'"
+    assert len(report.analysis.problems) == 1
+    assert report.benchmark is None  # mock mode
