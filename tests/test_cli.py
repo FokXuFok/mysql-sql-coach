@@ -49,7 +49,8 @@ def test_cli_analyze_mock_mode():
         mock_coach.analyze.return_value = mock_report
         mock_coach_cls.return_value = mock_coach
 
-        result = runner.invoke(main, ["analyze", "SELECT * FROM t", "--mock"])
+        result = runner.invoke(main, ["analyze", "SELECT * FROM t", "--mock"],
+                               input="2\n")
 
     assert result.exit_code == 0
     assert mock_coach.analyze.called
