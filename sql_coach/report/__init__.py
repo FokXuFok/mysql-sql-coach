@@ -1,0 +1,1 @@
+"""SQL Coach report generation."""
