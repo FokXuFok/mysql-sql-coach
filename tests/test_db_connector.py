@@ -1,5 +1,4 @@
 # tests/test_db_connector.py
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -74,3 +73,58 @@ def test_db_connector_execute(db_config):
     conn.execute("CREATE INDEX idx_test ON t(col)")
     mock_cursor.execute.assert_called_with("CREATE INDEX idx_test ON t(col)")
     assert mock_conn.commit.called
+
+
+def test_db_connector_is_connected_when_not_connected(db_config):
+    """Test is_connected returns False when no connection."""
+    conn = DBConnector(db_config)
+    assert conn.is_connected() is False
+
+
+def test_db_connector_is_connected_when_connected(db_config):
+    """Test is_connected returns True when connected."""
+    conn = DBConnector(db_config)
+    mock_conn = MagicMock()
+    mock_conn.open = True
+    conn._conn = mock_conn
+    assert conn.is_connected() is True
+
+
+def test_db_connector_explain_not_connected(db_config):
+    """Test explain returns error result when not connected."""
+    conn = DBConnector(db_config)
+    result = conn.explain("SELECT * FROM t")
+    assert result.rows == []
+    assert result.is_full_scan is False
+    assert "数据库未连接" in result.problems[0]
+
+
+def test_db_connector_explain_delegates_to_run_explain(db_config):
+    """Test explain delegates to run_explain when connected."""
+    from sql_coach.models import ExplainResult
+    conn = DBConnector(db_config)
+    mock_conn = MagicMock()
+    mock_conn.open = True
+    conn._conn = mock_conn
+
+    expected_result = ExplainResult(
+        rows=[], is_full_scan=False, missing_indexes=[], problems=[]
+    )
+    with patch("sql_coach.db.connector._run_explain", return_value=expected_result):
+        result = conn.explain("SELECT * FROM t")
+
+    assert result is expected_result
+
+
+def test_db_connector_benchmark_not_connected(db_config):
+    """Test benchmark returns 0.0 when not connected."""
+    conn = DBConnector(db_config)
+    elapsed = conn.benchmark("SELECT 1", runs=3)
+    assert elapsed == 0.0
+
+
+def test_db_connector_execute_not_connected_raises(db_config):
+    """Test execute raises RuntimeError when not connected."""
+    conn = DBConnector(db_config)
+    with pytest.raises(RuntimeError):
+        conn.execute("CREATE INDEX idx ON t(c)")

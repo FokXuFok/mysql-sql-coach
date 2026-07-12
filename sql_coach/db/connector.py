@@ -29,7 +29,6 @@ class DBConnector:
                 password=self.config.password,
                 database=self.config.database,
                 charset="utf8mb4",
-                cursorclass=pymysql.cursors.DictCursor,
             )
             return True
         except Exception as e:
@@ -65,6 +64,8 @@ class DBConnector:
             elapsed = time.perf_counter() - start
             times.append(elapsed)
 
+        if not times:
+            logger.warning(f"All {runs} benchmark runs failed for SQL: {sql}")
         return sum(times) / len(times) if times else 0.0
 
     def execute(self, sql: str) -> None:
@@ -80,6 +81,6 @@ class DBConnector:
         if self._conn:
             try:
                 self._conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Error closing connection: {e}")
         self._conn = None
