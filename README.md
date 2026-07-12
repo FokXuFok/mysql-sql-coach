@@ -34,6 +34,8 @@ sql-coach config init
 
 ### 使用
 
+#### 方式一: 命令行 (CLI)
+
 ```bash
 # 分析单条 SQL
 sql-coach analyze "SELECT * FROM orders WHERE status='pending'"
@@ -47,6 +49,15 @@ sql-coach analyze --mock "SELECT * FROM orders WHERE status='pending'"
 # 指定 AI 模型
 sql-coach analyze -m openai "SELECT * FROM orders"
 ```
+
+#### 方式二: 交互式入口 (适合 PyCharm / IDE)
+
+```bash
+python main.py
+```
+
+在 PyCharm 中打开项目, 直接运行 `main.py`, 输入 SQL 即可分析, 输入 `q` 退出。
+支持连续分析多条 SQL, 无需重复启动。详见 [USAGE.md](USAGE.md#方式二交互式入口-mainpy)。
 
 ## 示例输出
 

@@ -180,6 +180,57 @@ sql-coach --help       # 查看帮助
 
 ---
 
+## 4.4 方式二: 交互式入口 (main.py)
+
+适合在 PyCharm / VS Code 等 IDE 中运行, 支持连续分析多条 SQL。
+
+### 启动
+
+```bash
+python main.py
+```
+
+### 交互流程
+
+```
+╔══════════════════════════════════════════╗
+║   SQL Coach - AI 慢查询优化教练          ║
+╚══════════════════════════════════════════╝
+输入 SQL 进行分析, 输入 q 退出
+
+> 输入 SQL (或 q 退出): SELECT * FROM commodity WHERE Cname='牛奶'
+分析中: SELECT * FROM commodity WHERE Cname='牛奶';
+... (完整报告输出)
+
+摘要
+  优化后 SQL: SELECT * FROM commodity WHERE Cname='牛奶'
+  索引建议: CREATE INDEX idx_commodity_Cname ON commodity(Cname);
+  提速: 1.6x
+
+> 输入 SQL (或 q 退出): SELECT * FROM orders WHERE status='pending'
+... (继续分析下一条)
+
+> 输入 SQL (或 q 退出): q
+已退出 SQL Coach, 再见
+```
+
+### 特点
+
+- **循环分析**: 不用重复启动, 一条接一条分析
+- **输入 q 退出**: 输入 `q` / `quit` / `exit` 任一即可退出
+- **自动补分号**: SQL 末尾没分号会自动补上
+- **错误隔离**: 单条 SQL 分析失败不会退出, 可继续输入下一条
+- **降级模式**: 数据库连不上时自动切换到模拟模式
+
+### PyCharm 配置
+
+1. File → Open → 选择 `sql-coach` 目录
+2. 配置 Python 解释器 (已装 sql-coach 的 Python 3.10+)
+3. 打开 `main.py`, 右键 → Run 'main' (或按 Shift+F10)
+4. 在运行控制台输入 SQL 即可
+
+---
+
 ## 5. 三种使用模式
 
 ### 模式 A：真实模式（完整功能）
