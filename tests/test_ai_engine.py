@@ -128,3 +128,42 @@ def test_deepseek_analyze_without_explain(sample_sql_info):
         result = engine.analyze(sample_sql_info, None)
 
     assert isinstance(result, AnalysisResult)
+
+
+from sql_coach.ai.openai_adapter import OpenAIEngine
+from sql_coach.ai.ollama import OllamaEngine
+
+
+def test_openai_engine_name():
+    engine = OpenAIEngine(api_key="sk-test")
+    assert engine.name() == "openai"
+
+
+def test_ollama_engine_name():
+    engine = OllamaEngine(url="http://localhost:11434")
+    assert engine.name() == "ollama"
+
+
+def test_factory_creates_openai():
+    from sql_coach.models import Config, DBConfig
+    db = DBConfig(host="localhost", port=3306, user="root",
+                  password="x", database="test")
+    config = Config(db=db, model="openai",
+                    deepseek_api_key="", openai_api_key="sk-x",
+                    ollama_url="http://localhost:11434",
+                    benchmark_runs=3, mock=False)
+    engine = create_ai_engine("openai", config)
+    assert isinstance(engine, OpenAIEngine)
+
+
+def test_factory_creates_ollama():
+    from sql_coach.models import Config, DBConfig
+    db = DBConfig(host="localhost", port=3306, user="root",
+                  password="x", database="test")
+    config = Config(db=db, model="ollama",
+                    deepseek_api_key="", openai_api_key="",
+                    ollama_url="http://localhost:11434",
+                    benchmark_runs=3, mock=False)
+    engine = create_ai_engine("ollama", config)
+    assert isinstance(engine, OllamaEngine)
+
