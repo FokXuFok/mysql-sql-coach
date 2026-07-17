@@ -33,3 +33,6 @@ sql-coach-gui.exe
 # 开发调试脚本
 profile_main.py
 debug.log
+
+# 已放弃 splash 功能, 不提交图片
+splash.png

@@ -18,7 +18,8 @@ from sql_coach.coach import Report
 from sql_coach.models import Problem
 
 from .explain_table import ExplainTableWidget
-from .benchmark_chart import BenchmarkChartWidget
+# 注意: benchmark_chart 故意不在顶部导入, 避免启动时加载 matplotlib/numpy/PIL
+# (省 ~2-3 秒启动时间). 仅在首次渲染报告时延迟导入.
 
 # 严重度图标
 _SEVERITY_ICONS = {
@@ -138,6 +139,8 @@ class ReportView(QScrollArea):
         """性能对比章节。"""
         if benchmark is None:
             return None
+        # 延迟导入: 首次渲染报告时才加载 matplotlib/numpy (省启动时间)
+        from .benchmark_chart import BenchmarkChartWidget
         frame = QFrame()
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(0, 0, 0, 0)
