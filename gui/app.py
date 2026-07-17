@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 from sql_coach.config import load_config
 
 from gui.main_window import MainWindow
+from gui.paths import get_env_path
 
 
 def run() -> None:
@@ -19,9 +20,11 @@ def run() -> None:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("SQL Coach")
 
+    env_path = get_env_path()
+
     # 加载配置 (失败时降级 mock 模式)
     try:
-        config = load_config()
+        config = load_config(env_path=env_path)
     except Exception:
         from sql_coach.models import Config, DBConfig
         config = Config(
@@ -35,6 +38,6 @@ def run() -> None:
             mock=True,
         )
 
-    window = MainWindow(config=config)
+    window = MainWindow(config=config, env_path=env_path)
     window.show()
     sys.exit(app.exec())

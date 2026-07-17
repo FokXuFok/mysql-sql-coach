@@ -28,9 +28,14 @@ from gui.workers.analyze_worker import AnalyzeWorker, stage_label
 class MainWindow(QMainWindow):
     """主窗口: 左右分栏 SqlInputWidget + ReportView。"""
 
-    def __init__(self, config: Optional[Config] = None) -> None:
+    def __init__(
+        self,
+        config: Optional[Config] = None,
+        env_path: str = ".env",
+    ) -> None:
         super().__init__()
-        self.config = config or load_config()
+        self.config = config or load_config(env_path=env_path)
+        self.env_path = env_path
         self.history = HistoryStore()
         self.exporter = Exporter()
         self.worker: Optional[AnalyzeWorker] = None
@@ -253,10 +258,10 @@ class MainWindow(QMainWindow):
 
     def _on_open_settings(self) -> None:
         """打开设置对话框。"""
-        dialog = SettingsDialog(env_path=".env", parent=self)
+        dialog = SettingsDialog(env_path=self.env_path, parent=self)
         if dialog.exec():
             # 重新加载配置
-            self.config = load_config(mock=self.config.mock)
+            self.config = load_config(env_path=self.env_path, mock=self.config.mock)
             self.status_bar.showMessage("配置已更新")
             self._check_db_connection()
 
