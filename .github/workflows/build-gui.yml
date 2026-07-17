@@ -1,5 +1,5 @@
 # .github/workflows/build-gui.yml
-# 三平台并行构建 SQL Coach GUI 桌面版
+# 三平台并行构建 SQL Coach GUI 桌面版 (onedir 模式)
 name: Build GUI
 
 on:
@@ -18,14 +18,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact_name: sql-coach-gui
-            asset_extension: .exe
+            asset_name: sql-coach-gui-windows.zip
           - os: macos-latest
-            artifact_name: sql-coach-gui
-            asset_extension: -macos.tar.gz
+            asset_name: sql-coach-gui-macos.tar.gz
           - os: ubuntu-latest
-            artifact_name: sql-coach-gui
-            asset_extension: -linux.tar.gz
+            asset_name: sql-coach-gui-linux.tar.gz
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -49,47 +46,37 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y libxcb-xinerama0 libxkbcommon-x11-0 libegl1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0
 
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (onedir)
         run: pyinstaller sql-coach.spec --clean --noconfirm
 
-      - name: Package artifact (Windows)
+      - name: Package (Windows zip)
         if: matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}-windows
-          path: dist/sql-coach-gui.exe
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/sql-coach-gui -DestinationPath dist/sql-coach-gui-windows.zip
 
-      - name: Package artifact (macOS)
+      - name: Package (macOS tar.gz)
         if: matrix.os == 'macos-latest'
         run: |
-          # onefile 模式生成可执行文件, 打包为 tar.gz
           cd dist
           tar -czvf sql-coach-gui-macos.tar.gz sql-coach-gui
 
-      - name: Upload artifact (macOS)
-        if: matrix.os == 'macos-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}-macos
-          path: dist/sql-coach-gui-macos.tar.gz
-
-      - name: Package artifact (Linux)
+      - name: Package (Linux tar.gz)
         if: matrix.os == 'ubuntu-latest'
         run: |
           cd dist
           tar -czvf sql-coach-gui-linux.tar.gz sql-coach-gui
 
-      - name: Upload artifact (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}-linux
-          path: dist/sql-coach-gui-linux.tar.gz
+          name: build-${{ matrix.os }}
+          path: dist/${{ matrix.asset_name }}
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/sql-coach-gui${{ matrix.asset_extension }}
+          files: dist/${{ matrix.asset_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
