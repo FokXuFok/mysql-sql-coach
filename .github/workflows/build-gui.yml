@@ -22,10 +22,10 @@ jobs:
             asset_extension: .exe
           - os: macos-latest
             artifact_name: sql-coach-gui
-            asset_extension: .tar.gz
+            asset_extension: -macos.tar.gz
           - os: ubuntu-latest
             artifact_name: sql-coach-gui
-            asset_extension: .tar.gz
+            asset_extension: -linux.tar.gz
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -64,27 +64,27 @@ jobs:
         run: |
           # onefile 模式生成可执行文件, 打包为 tar.gz
           cd dist
-          tar -czvf sql-coach-gui.tar.gz sql-coach-gui
+          tar -czvf sql-coach-gui-macos.tar.gz sql-coach-gui
 
       - name: Upload artifact (macOS)
         if: matrix.os == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}-macos
-          path: dist/sql-coach-gui.tar.gz
+          path: dist/sql-coach-gui-macos.tar.gz
 
       - name: Package artifact (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
           cd dist
-          tar -czvf sql-coach-gui.tar.gz sql-coach-gui
+          tar -czvf sql-coach-gui-linux.tar.gz sql-coach-gui
 
       - name: Upload artifact (Linux)
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}-linux
-          path: dist/sql-coach-gui.tar.gz
+          path: dist/sql-coach-gui-linux.tar.gz
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
