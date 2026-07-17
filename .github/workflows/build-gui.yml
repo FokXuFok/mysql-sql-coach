@@ -1,0 +1,106 @@
+# .github/workflows/build-gui.yml
+# 三平台并行构建 SQL Coach GUI 桌面版
+name: Build GUI
+
+on:
+  push:
+    tags:
+      - 'v*'  # 仅在打 v* 标签时触发
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: sql-coach-gui
+            asset_extension: .exe
+            asset_content_type: application/vnd.microsoft.portable-executable
+          - os: macos-latest
+            artifact_name: sql-coach-gui
+            asset_extension: .dmg
+            asset_content_type: application/x-apple-diskimage
+          - os: ubuntu-latest
+            artifact_name: sql-coach-gui
+            asset_extension: .tar.gz
+            asset_content_type: application/gzip
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[gui]"
+          pip install pyinstaller
+
+      - name: Build with PyInstaller (Windows)
+        if: matrix.os == 'windows-latest'
+        run: pyinstaller sql-coach.spec --clean --noconfirm
+
+      - name: Build with PyInstaller (macOS)
+        if: matrix.os == 'macos-latest'
+        run: pyinstaller sql-coach.spec --clean --noconfirm
+
+      - name: Build with PyInstaller (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          # Linux 需要 X11 虚拟显示库
+          sudo apt-get update -y
+          sudo apt-get install -y libxcb-xinerama0 libxkbcommon-x11-0 libegl1
+          pyinstaller sql-coach.spec --clean --noconfirm
+
+      - name: Package artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-windows
+          path: dist/sql-coach-gui.exe
+
+      - name: Package artifact (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          # 打包为 dmg
+          hdiutil create -volname "SQL Coach" -srcfolder dist/sql-coach-gui.app -ov -format UDZO dist/SQLCoach.dmg
+        shell: bash
+
+      - name: Package artifact (macOS upload)
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-macos
+          path: dist/SQLCoach.dmg
+
+      - name: Package artifact (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cd dist
+          tar -czvf sql-coach-gui.tar.gz sql-coach-gui
+        shell: bash
+
+      - name: Upload artifact (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-linux
+          path: dist/sql-coach-gui.tar.gz
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/sql-coach-gui${{ matrix.asset_extension }}
+            dist/SQLCoach.dmg
+            dist/sql-coach-gui.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
