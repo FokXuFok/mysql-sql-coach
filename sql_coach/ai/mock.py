@@ -1,6 +1,5 @@
-# sql_coach/ai/mock.py
 """Mock AI engine for mock mode (no real API calls)."""
-from typing import Optional
+from typing import Callable, Optional
 
 from ..models import SQLInfo, ExplainResult, AnalysisResult, Problem
 from .base import AIEngine
@@ -16,6 +15,7 @@ class MockAIEngine(AIEngine):
         self,
         sql_info: SQLInfo,
         explain_result: Optional[ExplainResult],
+        on_chunk: Optional[Callable[[str], None]] = None,
     ) -> AnalysisResult:
         """Return a demo analysis result based on SQL structure."""
         problems = []

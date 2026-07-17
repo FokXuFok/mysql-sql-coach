@@ -1,8 +1,8 @@
-# sql_coach/ai/ollama.py
 """Ollama local AI engine adapter."""
+import json
 import logging
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 
@@ -29,15 +29,17 @@ class OllamaEngine(AIEngine):
         self,
         sql_info: SQLInfo,
         explain_result: Optional[ExplainResult],
+        on_chunk: Optional[Callable[[str], None]] = None,
     ) -> AnalysisResult:
         user_message = _build_user_message(sql_info, explain_result)
+        streaming = on_chunk is not None
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
             ],
-            "stream": False,
+            "stream": streaming,
             "format": "json",
             "options": {"temperature": 0.1},
         }
@@ -46,13 +48,29 @@ class OllamaEngine(AIEngine):
         with httpx.Client(timeout=60.0) as client:
             for attempt in range(self.max_retries):
                 try:
-                    response = client.post(
-                        f"{self.url}/api/chat",
-                        json=payload,
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-                    content = data.get("message", {}).get("content", "")
+                    if streaming:
+                        content_parts = []
+                        with client.stream(
+                            "POST", f"{self.url}/api/chat", json=payload
+                        ) as resp:
+                            resp.raise_for_status()
+                            for line in resp.iter_lines():
+                                if not line:
+                                    continue
+                                data = json.loads(line)
+                                delta = data.get("message", {}).get("content", "")
+                                if delta:
+                                    content_parts.append(delta)
+                                    on_chunk(delta)
+                        content = "".join(content_parts)
+                    else:
+                        response = client.post(
+                            f"{self.url}/api/chat",
+                            json=payload,
+                        )
+                        response.raise_for_status()
+                        data = response.json()
+                        content = data.get("message", {}).get("content", "")
                     return _parse_ai_response(content, sql_info.raw_sql)
                 except Exception as e:
                     last_error = e

@@ -1,10 +1,9 @@
-# sql_coach/ai/deepseek.py
 """DeepSeek AI engine implementation."""
 import json
 import logging
 import re
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from openai import OpenAI
 
@@ -12,7 +11,6 @@ from ..models import SQLInfo, ExplainResult, AnalysisResult, Problem
 from .base import AIEngine
 
 logger = logging.getLogger(__name__)
-
 
 SYSTEM_PROMPT = """你是 MySQL 优化专家。分析用户的 SQL 和 EXPLAIN 结果，给出优化建议。
 
@@ -111,22 +109,42 @@ class DeepSeekEngine(AIEngine):
         self,
         sql_info: SQLInfo,
         explain_result: Optional[ExplainResult],
+        on_chunk: Optional[Callable[[str], None]] = None,
     ) -> AnalysisResult:
         user_message = _build_user_message(sql_info, explain_result)
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ]
 
         last_error = None
         for attempt in range(self.max_retries):
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_message},
-                    ],
-                    temperature=0.1,
-                    response_format={"type": "json_object"},
-                )
-                content = response.choices[0].message.content
+                if on_chunk is not None:
+                    # 流式模式: 逐块返回内容
+                    stream = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=0.1,
+                        response_format={"type": "json_object"},
+                        stream=True,
+                    )
+                    content_parts = []
+                    for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            delta = chunk.choices[0].delta.content
+                            content_parts.append(delta)
+                            on_chunk(delta)
+                    content = "".join(content_parts)
+                else:
+                    # 非流式模式
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=0.1,
+                        response_format={"type": "json_object"},
+                    )
+                    content = response.choices[0].message.content
                 return _parse_ai_response(content, sql_info.raw_sql)
             except Exception as e:
                 last_error = e
