@@ -1,6 +1,6 @@
 # sql-coach.spec
 # -*- mode: python ; coding: utf-8 -*-
-"""SQL Coach GUI PyInstaller 配置 (onedir, 无 splash)。"""
+"""SQL Coach GUI PyInstaller 配置 (onedir, 含 .env.example 模板)。"""
 
 block_cipher = None
 
@@ -8,7 +8,10 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        # .env.example 模板打包进 _internal/, 用户复制到 exe 同级改名 .env
+        ('.env.example', '.'),
+    ],
     hiddenimports=[
         'PySide6.QtCore',
         'PySide6.QtGui',
