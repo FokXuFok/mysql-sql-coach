@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+import matplotlib
+
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
@@ -12,6 +14,15 @@ from sql_coach.models import BenchmarkResult
 # 配色: 原始 SQL 红色, 优化 SQL 绿色 (Catppuccin 风格)
 _COLOR_ORIGINAL = "#f38ba8"
 _COLOR_OPTIMIZED = "#a6e3a1"
+
+# 配置中文字体 (DejaVu Sans 默认不支持 CJK)
+# Windows: Microsoft YaHei | macOS: PingFang SC | Linux: WenQuanYi/Noto
+matplotlib.rcParams["font.sans-serif"] = [
+    "Microsoft YaHei", "PingFang SC", "Heiti SC",
+    "WenQuanYi Micro Hei", "Noto Sans CJK SC", "SimHei",
+    "DejaVu Sans",  # 兜底
+]
+matplotlib.rcParams["axes.unicode_minus"] = False  # 修复负号显示
 
 
 class BenchmarkChartWidget(FigureCanvasQTAgg):
