@@ -79,3 +79,28 @@ def test_cli_analyze_has_engine_option():
     from sql_coach.cli import main
     result = CliRunner().invoke(main, ["analyze", "--help"])
     assert "--engine" in result.output
+
+
+def test_interactive_analyze_one_shows_engine(capsys):
+    from unittest.mock import MagicMock
+    from sql_coach.interactive import analyze_one
+    from sql_coach.models import Config, DBConfig, AnalysisResult, SQLInfo, Complexity
+    from sql_coach.coach import Report
+
+    config = Config(db=DBConfig("h", 3306, "u", "p", "d"), model="deepseek",
+                    deepseek_api_key="k", openai_api_key="", ollama_url="http://x",
+                    benchmark_runs=3, mock=True)
+    coach = MagicMock()
+    coach.analyze.return_value = Report(
+        sql_info=SQLInfo(raw_sql="SELECT 1", sql_type="SELECT", tables=[], columns=[],
+                         where_conditions=[], join_tables=[], order_by=[]),
+        explain=None,
+        analysis=AnalysisResult(problems=[], optimized_sql="SELECT 1",
+                                index_ddls=[], explanation="ok"),
+        benchmark=None,
+        engine_used="local",
+        complexity=Complexity(level="simple", score=0, reasons=[]),
+    )
+    analyze_one(coach, "SELECT 1")
+    out = capsys.readouterr().out
+    assert "local" in out
