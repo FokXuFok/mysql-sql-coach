@@ -31,7 +31,10 @@ def main():
               help="指定 AI 模型")
 @click.option("--mock", is_flag=True, help="使用模拟模式（无需数据库）")
 @click.option("--no-cache", is_flag=True, help="禁用 AI 分析缓存")
-def analyze(sql, file, model, mock, no_cache):
+@click.option("--engine", "-e", default=None,
+              type=click.Choice(["auto", "local", "ai"]),
+              help="优化引擎: auto/local/ai")
+def analyze(sql, file, model, mock, no_cache, engine):
     """分析并优化 SQL 语句。"""
     # Get SQL from argument or file
     if file:
@@ -45,6 +48,8 @@ def analyze(sql, file, model, mock, no_cache):
     config = load_config(mock=mock)
     if model:
         config.model = model
+    if engine:
+        config.optimizer_mode = engine
 
     # Connect
     console.print("\U0001f50d 正在连接 MySQL... ", end="")
@@ -76,6 +81,10 @@ def analyze(sql, file, model, mock, no_cache):
     output = format_report(report.sql_info, report.explain,
                            report.analysis, report.benchmark)
     console.print(output)
+
+    level = report.complexity.level if report.complexity else "-"
+    score = report.complexity.score if report.complexity else "-"
+    console.print(f"[dim]优化引擎: {report.engine_used} | 复杂度: {level} (score {score})[/dim]")
 
     # Interactive choice
     _interactive_choice(sql, report.analysis.optimized_sql)
@@ -144,6 +153,24 @@ def config_test():
     # Test AI
     console.print("\U0001f916 测试 AI 连接... ", end="")
     console.print("[yellow]（需要实际调用才能确认）[/yellow]")
+
+
+@main.command()
+@click.option("--fix", is_flag=True, help="自动修复可安全修复的项（如生成 .env 模板）")
+def doctor(fix):
+    """环境自检：检查 .env / MySQL / AI 配置 / 运行环境。"""
+    from .diagnostics.checks import run_all
+    from .diagnostics.installer import apply_auto_fixes
+    from .diagnostics.report import format_results
+
+    config = load_config()
+    env_path = ".env"
+    results = run_all(config, env_path)
+    if fix:
+        for o in apply_auto_fixes(results, env_path):
+            console.print(f"[cyan]{o.message}[/cyan]")
+        results = run_all(config, env_path)
+    console.print(format_results(results))
 
 
 @main.group()

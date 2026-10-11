@@ -64,3 +64,18 @@ def test_cli_config_init():
         assert result.exit_code == 0
         import os
         assert os.path.exists(".env")
+
+
+def test_cli_has_doctor_command():
+    from click.testing import CliRunner
+    from sql_coach.cli import main
+    result = CliRunner().invoke(main, ["doctor", "--help"])
+    assert result.exit_code == 0
+    assert "自检" in result.output or "doctor" in result.output.lower()
+
+
+def test_cli_analyze_has_engine_option():
+    from click.testing import CliRunner
+    from sql_coach.cli import main
+    result = CliRunner().invoke(main, ["analyze", "--help"])
+    assert "--engine" in result.output
