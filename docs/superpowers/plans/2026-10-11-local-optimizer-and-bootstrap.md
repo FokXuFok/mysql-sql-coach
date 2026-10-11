@@ -221,17 +221,13 @@ from ..models import SQLInfo, Complexity
 DEFAULT_THRESHOLD = 8
 SIMPLE_MAX = 3
 
-_RESERVED = {
-    "where", "group", "order", "limit", "having", "on", "join", "inner",
-    "left", "right", "union", "set", "values", "as", "and", "or", "by",
-}
-
 
 class ComplexityScorer:
     """按 SQL 结构特征打分并划分等级。"""
 
     def __init__(self, threshold: int = DEFAULT_THRESHOLD):
-        self.threshold = threshold
+        # 阈值下界钳制：0/负数会让一切判为 complex
+        self.threshold = max(1, threshold)
 
     def score(self, sql_info: SQLInfo) -> Complexity:
         sql = sql_info.raw_sql or ""
@@ -251,11 +247,6 @@ class ComplexityScorer:
         if subqueries:
             s += 3 * subqueries
             reasons.append(f"{subqueries} 个子查询/派生表")
-
-        correlated = self._count_correlated(sql_info, sql)
-        if correlated:
-            s += 5 * correlated
-            reasons.append(f"{correlated} 个相关子查询")
 
         if re.search(r"\bWITH\b", upper):
             s += 3
@@ -292,24 +283,12 @@ class ComplexityScorer:
         else:
             level = "complex"
         return Complexity(level=level, score=s, reasons=reasons)
-
-    @staticmethod
-    def _count_correlated(sql_info: SQLInfo, sql: str) -> int:
-        aliases = {t.lower() for t in sql_info.tables}
-        for m in re.finditer(
-            r"\b(?:FROM|JOIN)\s+([A-Za-z_]\w*)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?",
-            sql, re.IGNORECASE,
-        ):
-            alias = m.group(2)
-            if alias and alias.lower() not in _RESERVED:
-                aliases.add(alias.lower())
-        count = 0
-        for m in re.finditer(r"\(\s*SELECT\b([^()]*)\)", sql, re.IGNORECASE | re.DOTALL):
-            inner = m.group(1)
-            if any(re.search(rf"\b{re.escape(a)}\s*\.", inner, re.IGNORECASE) for a in aliases):
-                count += 1
-        return count
 ```
+
+> **关于相关子查询**：早期设计曾打算对相关子查询额外 +5，但纯正则启发式在
+> "子查询内部含函数/嵌套括号"时会漏判、在"子查询自带别名/派生表"时会误判（双向都错），
+> 会把简单查询误抬成 complex、把复杂查询漏判为 medium。因此**本期不做相关子查询识别**，
+> 仅保留"子查询/派生表 +3"这一稳健计数。
 
 - [ ] **Step 4: 运行确认通过**
 
@@ -350,16 +329,22 @@ class FakeConnector:
     def is_connected(self):
         return self.connected
 
-    def query(self, sql, params=()):
+    def query(self, sql, params=None):
         self.calls.append(sql)
+        wanted = {str(p).lower() for p in (params or ())}
         if "information_schema.COLUMNS" in sql:
-            return [("orders", "id", "bigint"),
+            rows = [("orders", "id", "bigint"),
                     ("orders", "status", "varchar"),
-                    ("orders", "created_at", "datetime")]
-        if "information_schema.STATISTICS" in sql:
-            return [("orders", "PRIMARY", 1, "id"),
-                    ("orders", "idx_status", 1, "status")]
-        return []
+                    ("orders", "created_at", "datetime"),
+                    ("users", "id", "bigint"),
+                    ("users", "phone", "varchar")]
+        elif "information_schema.STATISTICS" in sql:
+            rows = [("orders", "PRIMARY", 1, "id"),
+                    ("orders", "idx_status", 1, "status"),
+                    ("users", "PRIMARY", 1, "id")]
+        else:
+            rows = []
+        return [r for r in rows if r[0].lower() in wanted]
 
 
 def test_empty_schema_is_falsy():
@@ -375,6 +360,20 @@ def test_has_index_on_and_column_type():
     assert not s.has_index_on("orders", "missing")
     assert s.column_type("orders", "status") == "varchar"
     assert s.column_type("orders", "nope") is None
+
+
+def test_has_index_on_uses_leftmost_column_only():
+    # 复合索引 (a, b)：单独用 b 无法走该索引
+    s = Schema(tables={"t": TableSchema(name="t", indexes=[["a", "b"]])})
+    assert s.has_index_on("t", "a")
+    assert not s.has_index_on("t", "b")
+
+
+def test_has_table_distinguishes_unknown_table():
+    assert not Schema().has_table("orders")
+    s = Schema(tables={"orders": TableSchema(name="orders")})
+    assert s.has_table("orders")
+    assert not s.has_table("users")
 
 
 def test_provider_without_connector_returns_empty():
@@ -398,6 +397,22 @@ def test_provider_caches_after_first_load():
     assert len(fake.calls) == n  # 第二次不再查库
 
 
+def test_provider_accumulates_across_different_tables():
+    """复用 provider 时，第二次换表不能返回陈旧 schema。"""
+    sp = SchemaProvider(FakeConnector())
+    sp.load(["orders"])
+    schema = sp.load(["users"])
+    assert schema.has_table("orders")
+    assert schema.has_table("users")
+
+
+def test_provider_empty_tables_does_not_pollute_cache():
+    """tables 为空时不得把空结果写进缓存。"""
+    sp = SchemaProvider(FakeConnector())
+    sp.load([])
+    assert sp.load(["orders"]).has_table("orders")
+
+
 def test_provider_swallows_query_error():
     class Boom(FakeConnector):
         def query(self, sql, params=()):
@@ -416,9 +431,10 @@ Expected: FAIL（`ModuleNotFoundError`）
 在 `sql_coach/db/connector.py` 的 `execute` 方法之后新增（不改动任何现有方法）：
 
 ```python
-    def query(self, sql: str, params: tuple = ()) -> list[tuple]:
-        """执行只读查询并返回所有行。未连接时返回空列表。"""
+    def query(self, sql: str, params=None) -> list[tuple]:
+        """执行只读查询并返回所有行；未连接时记录警告并返回空列表。"""
         if not self.is_connected():
+            logger.warning("数据库未连接，query 返回空结果")
             return []
         with self._conn.cursor() as cursor:
             cursor.execute(sql, params)
@@ -428,8 +444,24 @@ Expected: FAIL（`ModuleNotFoundError`）
 在 `sql_coach/db/mock.py` 的 `execute` 之后新增：
 
 ```python
-    def query(self, sql: str, params: tuple = ()) -> list[tuple]:
+    def query(self, sql: str, params=None) -> list[tuple]:
+        """模拟连接器无真实数据，返回空列表。"""
         return []
+```
+
+追加到 `tests/test_db_connector.py`：
+
+```python
+def test_query_returns_empty_when_not_connected():
+    from sql_coach.db.connector import DBConnector
+    from sql_coach.models import DBConfig
+    conn = DBConnector(DBConfig("h", 3306, "u", "p", "d"))
+    assert conn.query("SELECT 1") == []
+
+
+def test_mock_connector_query_returns_empty():
+    from sql_coach.db.mock import MockConnector
+    assert MockConnector().query("SELECT 1") == []
 ```
 
 创建 `sql_coach/local/schema.py`：
@@ -454,12 +486,17 @@ class TableSchema:
 class Schema:
     tables: dict[str, TableSchema] = field(default_factory=dict)
 
+    def has_table(self, table: str) -> bool:
+        """该表是否已从数据库读到（用于区分"已校验"与"未校验"）。"""
+        return table.lower() in self.tables
+
     def has_index_on(self, table: str, column: str) -> bool:
+        """该列是否为某个索引的最左列（MySQL 最左前缀语义）。"""
         t = self.tables.get(table.lower())
         if t is None:
             return False
         col = column.lower()
-        return any(col in [c.lower() for c in idx] for idx in t.indexes)
+        return any(idx and idx[0].lower() == col for idx in t.indexes)
 
     def column_type(self, table: str, column: str) -> Optional[str]:
         t = self.tables.get(table.lower())
@@ -472,23 +509,41 @@ class Schema:
 
 
 class SchemaProvider:
-    """从 information_schema 读取表结构与索引，结果缓存一次。"""
+    """从 information_schema 读取表结构与索引，按表累积缓存。
+
+    注意：provider 会被 SQLCoach 复用（CLI 交互模式一次会话分析多条 SQL），
+    因此缓存必须按表维度累积，不能"第一次查了谁就一直返回谁"。
+    """
 
     def __init__(self, connector=None):
         self.connector = connector
-        self._cache: Optional[Schema] = None
+        self._tables: dict[str, TableSchema] = {}
+        self._attempted: set[str] = set()
 
     def load(self, tables: list[str]) -> Schema:
-        if self._cache is not None:
-            return self._cache
         if self.connector is None or not self._is_connected():
             return Schema()
-        try:
-            self._cache = self._read(tables)
-        except Exception as e:  # noqa: BLE001 - 降级不阻断
-            logger.warning("读取 schema 失败，降级为空 schema: %s", e)
-            return Schema()
-        return self._cache
+        wanted = [t for t in tables if t and t.lower() not in self._attempted]
+        if wanted:
+            try:
+                fetched = self._read(wanted)
+            except Exception as e:  # noqa: BLE001 - 降级不阻断
+                logger.warning("读取 schema 失败，降级为空 schema: %s", e)
+                return Schema(tables=dict(self._tables))
+            self._merge(fetched)
+            self._attempted.update(t.lower() for t in wanted)
+        return Schema(tables=dict(self._tables))
+
+    def _merge(self, schema: Schema) -> None:
+        for name, ts in schema.tables.items():
+            existing = self._tables.get(name)
+            if existing is None:
+                self._tables[name] = ts
+                continue
+            existing.columns.update(ts.columns)
+            for idx in ts.indexes:
+                if idx not in existing.indexes:
+                    existing.indexes.append(idx)
 
     def _is_connected(self) -> bool:
         checker = getattr(self.connector, "is_connected", None)
@@ -751,7 +806,7 @@ class MissingIndexRule(Rule):
         table = self._table(ctx)
         if not table:
             return []
-        verified = bool(ctx.schema)
+        verified = ctx.schema.has_table(table)
         out = []
         for col in self._columns(ctx):
             desc = (f"WHERE 条件列 {col} 缺少索引" if verified
@@ -834,9 +889,11 @@ class ImplicitCastRule(Rule):
     risk = "safe"
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        if not ctx.schema or not ctx.sql_info.tables:
+        if not ctx.sql_info.tables:
             return []
         table = ctx.sql_info.tables[0]
+        if not ctx.schema.has_table(table):
+            return []
         out = []
         for cond in ctx.sql_info.where_conditions:
             m = _PAT.search(cond)
@@ -1243,7 +1300,7 @@ class LocalOptimizer:
             problems=problems,
             optimized_sql=optimized,
             index_ddls=ddls,
-            explanation=self._explain(hit, schema),
+            explanation=self._explain(hit, sql_info, schema),
         )
 
     @staticmethod
@@ -1255,10 +1312,12 @@ class LocalOptimizer:
             return default
 
     @staticmethod
-    def _explain(hit: list[str], schema: Schema) -> str:
+    def _explain(hit: list[str], sql_info: SQLInfo, schema: Schema) -> str:
         if not hit:
             return "本地规则引擎：未发现明显问题。"
-        note = "" if schema else "（未连接数据库，索引相关结论未校验）"
+        table = sql_info.tables[0] if sql_info.tables else ""
+        verified = bool(table) and schema.has_table(table)
+        note = "" if verified else "（未连接数据库，索引相关结论未校验）"
         return "本地规则引擎命中规则: " + ", ".join(hit) + note
 ```
 

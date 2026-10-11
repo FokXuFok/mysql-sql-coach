@@ -93,11 +93,14 @@ SQLCoach.analyze()  ← sql_coach/coach.py
 | `UNION` / `UNION ALL` | +2 |
 | 聚合函数 / `GROUP BY` / `HAVING` | +2 |
 | 窗口函数（`OVER`） | +5 |
-| 相关子查询 | +5 |
 | `CASE WHEN` / 嵌套函数表达式 | +2 |
 | 多 `OR` 条件（≥2） | +1 |
 | 无 `WHERE` 的全表查询 | +2 |
 | 多列排序 / 分组（≥2 列） | +1 |
+
+> **相关子查询不做识别**：早期设计曾计划对相关子查询额外 +5，但纯正则启发式在"子查询内部含
+> 函数/嵌套括号"时会漏判、在"子查询自带别名/派生表"时会误判，双向都不可靠，会把简单查询误抬成
+> complex、把复杂查询漏判为 medium。因此本期只保留"子查询/派生表 +3"这一稳健计数。
 
 ### 4.2 等级划分
 
@@ -173,10 +176,13 @@ class Rule(ABC):
 
 `sql_coach/local/schema.py` 的 `SchemaProvider`：
 
-- 连库时查询 `information_schema.STATISTICS`（现有索引）与 `COLUMNS`（列类型），结果**带缓存**
-- 返回 `Schema`（表 → 列类型 / 索引列表）
+- 连库时查询 `information_schema.STATISTICS`（现有索引）与 `COLUMNS`（列类型）
+- **按表累积缓存**：provider 会被 `SQLCoach` 跨多次 `analyze()` 复用（CLI 交互模式一次会话多条 SQL），
+  因此缓存按表维度累积，第二次换表不会返回陈旧结果；`tables` 为空时不写缓存
+- 返回 `Schema`（表 → 列类型 / 索引列表），并提供 `has_table()` 区分"表已读到"与"表未知"
+- `has_index_on()` 只认索引的**最左列**（MySQL 最左前缀语义）
 - 连不上库时返回空 `Schema`，规则降级为"疑似缺索引"，结论标注"未连接数据库，未校验现有索引"
-- 有 schema 时，"缺索引"规则跳过已存在的索引，只报真实缺失
+- 有 schema 且 `has_table(table)` 为真时，"缺索引"规则跳过已存在的索引，只报真实缺失
 
 ## 6. 分流路由
 
