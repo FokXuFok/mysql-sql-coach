@@ -34,6 +34,13 @@ class ExplainResult:
 
 
 @dataclass
+class Complexity:
+    level: str  # simple / medium / complex
+    score: int
+    reasons: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Problem:
     severity: str  # critical/warning/info
     table: str
@@ -76,6 +83,8 @@ class Config:
     ollama_url: str
     benchmark_runs: int
     mock: bool
+    optimizer_mode: str = "ai"          # dataclass 默认保持既有行为；from_env 默认 auto
+    complexity_threshold: int = 8
 
     @classmethod
     def from_env(cls, mock: bool = False) -> 'Config':
@@ -95,4 +104,6 @@ class Config:
             ollama_url=_get_env("OLLAMA_URL", "http://localhost:11434"),
             benchmark_runs=_get_env_int("BENCHMARK_RUNS", 3),
             mock=mock,
+            optimizer_mode=_get_env("OPTIMIZER_MODE", "auto"),
+            complexity_threshold=_get_env_int("COMPLEXITY_THRESHOLD", 8),
         )
