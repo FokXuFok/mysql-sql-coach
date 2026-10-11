@@ -9,38 +9,11 @@ import pyperclip
 from rich.console import Console
 
 from . import __version__
-from .config import load_config
+from .config import ENV_TEMPLATE, load_config
 from .coach import SQLCoach
 from .report.formatter import format_report
 
 console = Console()
-
-ENV_TEMPLATE = """# MySQL 连接
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=your_password
-DB_NAME=test
-
-# AI 模型: deepseek / openai / ollama
-AI_MODEL=deepseek
-
-# DeepSeek
-DEEPSEEK_API_KEY=sk-xxx
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-
-# OpenAI
-OPENAI_API_KEY=sk-xxx
-OPENAI_BASE_URL=https://api.openai.com/v1
-
-# Ollama
-OLLAMA_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:14b
-
-# 通用
-BENCHMARK_RUNS=3
-LOG_LEVEL=INFO
-"""
 
 
 @click.group()
