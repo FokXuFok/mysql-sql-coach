@@ -71,3 +71,26 @@ def test_clear_empties_content(app):
     view.clear()
     # 内容应该被清空 (label 文字为空或 widget 重置)
     assert view.widget() is not None
+
+
+def test_report_view_shows_engine_badge():
+    from PySide6.QtWidgets import QApplication, QLabel
+    from sql_coach.coach import Report
+    from sql_coach.models import SQLInfo, AnalysisResult, Complexity
+    from gui.widgets.report_view import ReportView
+
+    app = QApplication.instance() or QApplication([])
+    view = ReportView()
+    report = Report(
+        sql_info=SQLInfo(raw_sql="SELECT 1", sql_type="SELECT", tables=[], columns=[],
+                         where_conditions=[], join_tables=[], order_by=[]),
+        explain=None,
+        analysis=AnalysisResult(problems=[], optimized_sql="SELECT 1",
+                                index_ddls=[], explanation="ok"),
+        benchmark=None,
+        engine_used="local",
+        complexity=Complexity(level="simple", score=0, reasons=[]),
+    )
+    view.set_report(report)
+    texts = [w.text() for w in view.findChildren(QLabel)]
+    assert any("本地" in t for t in texts)
