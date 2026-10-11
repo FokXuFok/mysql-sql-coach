@@ -23,6 +23,8 @@ SQL Coach 输入一条 SQL，自动连接 MySQL 执行 EXPLAIN，调用 AI 大�
 - GUI 支持历史记录、Markdown / HTML 报告导出
 - 内置 Docker 测试环境（10 万行测试数据）
 - 无数据库时降级为 AI 推理模式（mock）
+- 本地规则引擎：简单/中等 SQL 毫秒级优化，复杂 SQL 才调用 AI（自动分流）
+- 启动环境自检：自动检测 .env / MySQL / AI 配置，能安全修复的自动修复
 - 跨平台支持：Windows / macOS / Linux
 
 ## 快速开始
@@ -219,6 +221,31 @@ sql-coach/
 - **打包**: PyInstaller (onedir 模式, 三平台分发)
 - **CI**: GitHub Actions (Windows / macOS / Linux 三平台并行构建)
 - **测试**: pytest + pytest-mock + pytest-cov
+
+## 优化分流
+
+SQL Coach 会按 SQL 复杂度自动选择优化引擎：
+
+- **简单 / 中等** → 本地规则引擎（毫秒级，不联网）
+- **复杂** → AI 大模型
+
+在 `.env` 中可通过两个配置项控制：
+
+```ini
+# 优化器分流: auto / local / ai
+OPTIMIZER_MODE=auto
+# 复杂度阈值（分数 >= 该值走 AI）
+COMPLEXITY_THRESHOLD=8
+```
+
+- `OPTIMIZER_MODE=auto`（默认）：自动分流；`local`：始终本地；`ai`：始终调用 AI
+- `COMPLEXITY_THRESHOLD` 默认 `8`：复杂度评分大于等于该值时走 AI
+
+也可在命令行临时指定引擎：
+
+```bash
+sql-coach analyze --engine local "SELECT * FROM orders WHERE status='pending'"
+```
 
 ## License
 
