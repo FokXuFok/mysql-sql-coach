@@ -146,3 +146,49 @@ def test_end_to_end_mock_mode():
     # Should suggest an index DDL for the WHERE column
     assert len(report.analysis.index_ddls) >= 1
     assert report.benchmark is None  # mock mode skips benchmark
+
+
+def test_coach_routes_simple_sql_to_local():
+    """auto 模式下简单 SQL 走本地引擎，不创建 AI 客户端。"""
+    from sql_coach.models import Config, DBConfig
+    from sql_coach.coach import SQLCoach
+    from unittest.mock import patch
+
+    db = DBConfig(host="h", port=3306, user="u", password="p", database="d")
+    config = Config(db=db, model="deepseek", deepseek_api_key="", openai_api_key="",
+                    ollama_url="http://x", benchmark_runs=3, mock=False, optimizer_mode="auto")
+    with patch("sql_coach.coach.DBConnector") as db_cls, \
+         patch("sql_coach.coach.create_ai_engine") as ai_factory:
+        mock_db = db_cls.return_value
+        mock_db.is_connected.return_value = False
+        coach = SQLCoach(config, use_cache=False)
+        report = coach.analyze("SELECT * FROM orders WHERE status='pending'")
+        assert report.engine_used == "local"
+        assert report.complexity is not None
+        assert ai_factory.call_count == 0
+
+
+def test_coach_routes_complex_sql_to_ai():
+    from sql_coach.models import Config, DBConfig
+    from sql_coach.coach import SQLCoach
+    from sql_coach.models import AnalysisResult
+    from unittest.mock import patch, MagicMock
+
+    db = DBConfig(host="h", port=3306, user="u", password="p", database="d")
+    config = Config(db=db, model="deepseek", deepseek_api_key="k", openai_api_key="",
+                    ollama_url="http://x", benchmark_runs=3, mock=False, optimizer_mode="auto")
+    with patch("sql_coach.coach.DBConnector") as db_cls, \
+         patch("sql_coach.coach.create_ai_engine") as ai_factory:
+        db_cls.return_value.is_connected.return_value = False
+        mock_ai = MagicMock()
+        mock_ai.name.return_value = "deepseek"
+        mock_ai.analyze.return_value = AnalysisResult(
+            problems=[], optimized_sql="SELECT 1", index_ddls=[], explanation="ok")
+        ai_factory.return_value = mock_ai
+
+        coach = SQLCoach(config, use_cache=False)
+        sql = ("SELECT ROW_NUMBER() OVER (ORDER BY a.id) FROM a "
+               "JOIN b ON a.id=b.id JOIN c ON b.id=c.id")
+        report = coach.analyze(sql)
+        assert report.engine_used == "deepseek"
+        assert mock_ai.analyze.called

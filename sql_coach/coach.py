@@ -6,8 +6,11 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .models import (
-    Config, SQLInfo, ExplainResult, AnalysisResult, BenchmarkResult
+    Config, SQLInfo, ExplainResult, AnalysisResult, BenchmarkResult, Complexity
 )
+from .local.complexity import ComplexityScorer
+from .local.schema import Schema, SchemaProvider
+from .optimizer import select_optimizer
 from .engine.sql_parser import parse as parse_sql
 from .ai.factory import create_ai_engine
 from .db.connector import DBConnector
@@ -25,6 +28,8 @@ class Report:
     explain: Optional[ExplainResult]
     analysis: AnalysisResult
     benchmark: Optional[BenchmarkResult]
+    engine_used: str = "ai"
+    complexity: Optional[Complexity] = None
 
 
 class SQLCoach:
@@ -36,12 +41,20 @@ class SQLCoach:
             self.db = MockConnector()
         else:
             self.db = DBConnector(config.db)
-        self.ai = create_ai_engine(config.model, config)
+        self._ai = None
+        self.schema_provider = SchemaProvider(self.db)
         # SQLite 永久缓存 (mock 模式跳过)
         if use_cache and not config.mock:
             self.cache = AnalysisCache()
         else:
             self.cache = None
+
+    @property
+    def ai(self):
+        """惰性创建 AI 引擎：纯本地模式不需要 API Key。"""
+        if self._ai is None:
+            self._ai = create_ai_engine(self.config.model, self.config)
+        return self._ai
 
     def connect(self) -> bool:
         """Connect to database. Returns True on success."""
@@ -73,6 +86,11 @@ class SQLCoach:
         if on_stage:
             on_stage("parse", 1, 4, "done")
 
+        # Step 1.5: 读取 schema（尽力而为，连不上库时为空）
+        schema = Schema()
+        if not self.config.mock and self.db.is_connected():
+            schema = self.schema_provider.load(sql_info.tables)
+
         # Step 2: Run EXPLAIN (skip in mock mode)
         if on_stage:
             on_stage("explain", 2, 4, "start")
@@ -84,19 +102,23 @@ class SQLCoach:
         if on_stage:
             on_stage("explain", 2, 4, "done")
 
-        # Step 3: AI analysis (带 SQLite 永久缓存)
+        # Step 3: 评分 + 分流（本地规则引擎 / AI）
+        complexity = ComplexityScorer(self.config.complexity_threshold).score(sql_info)
+        optimizer, engine_name = select_optimizer(
+            self.config, complexity, lambda: self.ai)
+
         if on_stage:
             on_stage("ai", 3, 4, "start")
         t = time.perf_counter()
         analysis = None
-        if self.cache:
+        if engine_name != "local" and self.cache:
             analysis = self.cache.get(sql)
         if analysis is not None:
-            logger.debug('timing ai: %.2f ms (cached)', (time.perf_counter() - t) * 1000)
+            logger.debug('timing optimize: %.2f ms (cached)', (time.perf_counter() - t) * 1000)
         else:
-            analysis = self.ai.analyze(sql_info, explain, on_chunk=on_chunk)
-            logger.debug('timing ai: %.2f ms', (time.perf_counter() - t) * 1000)
-            if self.cache:
+            analysis = optimizer.optimize(sql_info, explain, schema, on_chunk=on_chunk)
+            logger.debug('timing optimize: %.2f ms', (time.perf_counter() - t) * 1000)
+            if engine_name != "local" and self.cache:
                 self.cache.put(sql, analysis)
         if on_stage:
             on_stage("ai", 3, 4, "done")
@@ -124,6 +146,8 @@ class SQLCoach:
             explain=explain,
             analysis=analysis,
             benchmark=benchmark,
+            engine_used=engine_name,
+            complexity=complexity,
         )
 
     def close(self) -> None:
