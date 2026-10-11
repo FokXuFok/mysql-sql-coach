@@ -46,3 +46,15 @@ def test_reasons_recorded():
     info = make_info("SELECT * FROM a JOIN b ON a.id=b.id", tables=["a", "b"])
     c = ComplexityScorer().score(info)
     assert any("2 张表" in r for r in c.reasons)
+
+
+def test_correlated_subquery_not_specially_penalized():
+    info = make_info(
+        "SELECT u.id FROM users u WHERE (SELECT COUNT(*) FROM orders o "
+        "WHERE o.user_id=u.id) > 3",
+        tables=["users", "orders"],
+        where=["(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) > 3"])
+    c = ComplexityScorer().score(info)
+    # 2 表(+2) + 1 个子查询(+3) + 聚合函数 COUNT(+2) = 7，无"相关子查询"专项加分
+    assert c.score == 7
+    assert all("相关子查询" not in r for r in c.reasons)

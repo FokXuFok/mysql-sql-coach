@@ -6,17 +6,13 @@ from ..models import SQLInfo, Complexity
 DEFAULT_THRESHOLD = 8
 SIMPLE_MAX = 3
 
-_RESERVED = {
-    "where", "group", "order", "limit", "having", "on", "join", "inner",
-    "left", "right", "union", "set", "values", "as", "and", "or", "by",
-}
-
 
 class ComplexityScorer:
     """按 SQL 结构特征打分并划分等级。"""
 
     def __init__(self, threshold: int = DEFAULT_THRESHOLD):
-        self.threshold = threshold
+        # 阈值下界钳制：0/负数会让一切判为 complex
+        self.threshold = max(1, threshold)
 
     def score(self, sql_info: SQLInfo) -> Complexity:
         sql = sql_info.raw_sql or ""
@@ -36,11 +32,6 @@ class ComplexityScorer:
         if subqueries:
             s += 3 * subqueries
             reasons.append(f"{subqueries} 个子查询/派生表")
-
-        correlated = self._count_correlated(sql_info, sql)
-        if correlated:
-            s += 5 * correlated
-            reasons.append(f"{correlated} 个相关子查询")
 
         if re.search(r"\bWITH\b", upper):
             s += 3
@@ -70,27 +61,10 @@ class ComplexityScorer:
             s += 1
             reasons.append("多列排序")
 
-        if s <= SIMPLE_MAX and s <= self.threshold:
+        if s <= min(SIMPLE_MAX, self.threshold):
             level = "simple"
         elif s <= self.threshold:
             level = "medium"
         else:
             level = "complex"
         return Complexity(level=level, score=s, reasons=reasons)
-
-    @staticmethod
-    def _count_correlated(sql_info: SQLInfo, sql: str) -> int:
-        aliases = {t.lower() for t in sql_info.tables}
-        for m in re.finditer(
-            r"\b(?:FROM|JOIN)\s+([A-Za-z_]\w*)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?",
-            sql, re.IGNORECASE,
-        ):
-            alias = m.group(2)
-            if alias and alias.lower() not in _RESERVED:
-                aliases.add(alias.lower())
-        count = 0
-        for m in re.finditer(r"\(\s*SELECT\b([^()]*)\)", sql, re.IGNORECASE | re.DOTALL):
-            inner = m.group(1)
-            if any(re.search(rf"\b{re.escape(a)}\s*\.", inner, re.IGNORECASE) for a in aliases):
-                count += 1
-        return count

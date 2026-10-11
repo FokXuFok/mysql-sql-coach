@@ -25,7 +25,8 @@ class MockConnector:
     def execute(self, sql: str) -> None:
         pass
 
-    def query(self, sql: str, params: tuple = ()) -> list[tuple]:
+    def query(self, sql: str, params=None) -> list[tuple]:
+        """模拟连接器无真实数据，返回空列表。"""
         return []
 
     def close(self) -> None:
