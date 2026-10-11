@@ -2623,17 +2623,19 @@ class DiagnosticsDialog(QDialog):
         return format_results(self.results)
 ```
 
-修改 `gui/app.py`：在 `window = MainWindow(...)` 之前插入自检（跳过标记存在时不弹；仅当存在非 ok 项时弹）：
+修改 `gui/app.py`：在 `window = MainWindow(...)` 之前插入自检（跳过标记存在时不弹；仅当存在非 ok 项时弹）。
+**用非模态 `show()` 而不是 `exec()`**，并把对话框挂在 `app` 上保持引用——否则在无 MySQL/无 Key 的环境（如 CI）会因嵌套事件循环阻塞启动。
 
 ```python
-    from pathlib import Path
     from sql_coach.diagnostics.checks import run_all
     from gui.widgets.diagnostics_dialog import DiagnosticsDialog, SKIP_MARKER
 
     if not SKIP_MARKER.exists():
         results = run_all(config, env_path)
         if any(r.status != "ok" for r in results):
-            DiagnosticsDialog(results, env_path=env_path, config=config).exec()
+            dialog = DiagnosticsDialog(results, env_path=env_path, config=config)
+            app._diagnostics_dialog = dialog  # 保持引用，防止被 GC
+            dialog.show()                     # 非模态，不阻塞启动
 ```
 
 并在 `tests/test_diagnostics_dialog.py` 追加：
