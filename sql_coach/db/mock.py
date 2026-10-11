@@ -25,5 +25,8 @@ class MockConnector:
     def execute(self, sql: str) -> None:
         pass
 
+    def query(self, sql: str, params: tuple = ()) -> list[tuple]:
+        return []
+
     def close(self) -> None:
         pass
