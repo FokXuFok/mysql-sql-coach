@@ -35,9 +35,9 @@ def test_complex_window_three_tables():
 
 
 def test_threshold_override():
-    info = make_info("SELECT a, COUNT(*) FROM t GROUP BY a",
-                     tables=["t"], columns=["a"])
-    # 单表(0) + 聚合/分组(2) = 2
+    # 单表(0) + 聚合/分组(2) = 2；带 WHERE 所以不叠加"无 WHERE"惩罚
+    info = make_info("SELECT a, COUNT(*) FROM t WHERE x=1 GROUP BY a",
+                     tables=["t"], columns=["a"], where=["x=1"])
     assert ComplexityScorer(threshold=1).score(info).level == "complex"
     assert ComplexityScorer(threshold=8).score(info).level == "simple"
 

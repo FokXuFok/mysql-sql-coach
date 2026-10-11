@@ -48,15 +48,12 @@ class ComplexityScorer:
         if re.search(r"\bUNION\b", upper):
             s += 2
             reasons.append("UNION")
-        is_agg = False
         if re.search(r"\b(GROUP\s+BY|HAVING)\b", upper):
             s += 2
             reasons.append("聚合/分组")
-            is_agg = True
         elif re.search(r"\b(COUNT|SUM|AVG|MAX|MIN)\s*\(", upper):
             s += 2
             reasons.append("聚合函数")
-            is_agg = True
         if re.search(r"\bOVER\s*\(", upper):
             s += 5
             reasons.append("窗口函数")
@@ -66,7 +63,7 @@ class ComplexityScorer:
         if len(re.findall(r"\bOR\b", upper)) >= 2:
             s += 1
             reasons.append("多 OR 条件")
-        if sql_info.sql_type == "SELECT" and not sql_info.where_conditions and not is_agg:
+        if sql_info.sql_type == "SELECT" and not sql_info.where_conditions:
             s += 2
             reasons.append("无 WHERE 全表查询")
         if len(sql_info.order_by) >= 2:
