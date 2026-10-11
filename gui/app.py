@@ -34,6 +34,15 @@ def run() -> None:
             mock=True,
         )
 
+    from pathlib import Path
+    from sql_coach.diagnostics.checks import run_all
+    from gui.widgets.diagnostics_dialog import DiagnosticsDialog, SKIP_MARKER
+
+    if not SKIP_MARKER.exists():
+        results = run_all(config, env_path)
+        if any(r.status != "ok" for r in results):
+            DiagnosticsDialog(results, env_path=env_path, config=config).exec()
+
     window = MainWindow(config=config, env_path=env_path)
     window.show()
 
