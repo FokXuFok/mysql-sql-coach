@@ -775,6 +775,9 @@ def test_deep_pagination_threshold():
     assert len(DeepPaginationRule().check(ctx)) == 1
     ctx_ok = _ctx("SELECT * FROM orders LIMIT 10, 20", tables=["orders"], columns=["*"])
     assert DeepPaginationRule().check(ctx_ok) == []
+    ctx_off = _ctx("SELECT * FROM orders LIMIT 20 OFFSET 100000",
+                   tables=["orders"], columns=["*"])
+    assert len(DeepPaginationRule().check(ctx_off)) == 1
 
 
 def test_or_condition():
@@ -835,7 +838,10 @@ class MissingIndexRule(Rule):
                 for col in self._columns(ctx)]
 
     def _table(self, ctx: RuleContext):
-        return ctx.sql_info.tables[0] if ctx.sql_info.tables else ""
+        # 多表 JOIN 时无法判断条件列归属哪张表，保守跳过（避免 DDL 指错表）
+        if len(ctx.sql_info.tables) != 1:
+            return ""
+        return ctx.sql_info.tables[0]
 
     def _columns(self, ctx: RuleContext) -> list[str]:
         table = self._table(ctx)
@@ -851,7 +857,7 @@ class MissingIndexRule(Rule):
         return out
 
     @staticmethod
-    def _column(cond: str):
+    def _column(cond: str) -> "str | None":
         left = _OP_SPLIT.split(cond, maxsplit=1)[0].strip().strip("` ")
         if not _IDENT.match(left):
             return None
@@ -946,13 +952,14 @@ class NoLimitRule(Rule):
 `sql_coach/local/rules/deep_pagination.py`：
 
 ```python
-"""深分页规则：LIMIT offset,n 中 offset 过大。"""
+"""深分页规则：LIMIT offset,n 或 LIMIT n OFFSET offset 中 offset 过大。"""
 import re
 
 from ...models import Problem
 from .base import Rule, RuleContext
 
-_PAT = re.compile(r"\bLIMIT\s+(\d+)\s*,\s*(\d+)", re.IGNORECASE)
+_COMMA_PAT = re.compile(r"\bLIMIT\s+(\d+)\s*,\s*(\d+)", re.IGNORECASE)
+_OFFSET_PAT = re.compile(r"\bLIMIT\s+(\d+)\s+OFFSET\s+(\d+)", re.IGNORECASE)
 _OFFSET_THRESHOLD = 1000
 
 
@@ -961,12 +968,20 @@ class DeepPaginationRule(Rule):
     risk = "safe"  # 自动改写需主键信息，本期仅建议
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        m = _PAT.search(ctx.sql_info.raw_sql or "")
-        if not m or int(m.group(1)) < _OFFSET_THRESHOLD:
+        sql = ctx.sql_info.raw_sql or ""
+        offset = None
+        m = _COMMA_PAT.search(sql)
+        if m:
+            offset = int(m.group(1))
+        else:
+            m = _OFFSET_PAT.search(sql)
+            if m:
+                offset = int(m.group(2))
+        if offset is None or offset < _OFFSET_THRESHOLD:
             return []
         table = ctx.sql_info.tables[0] if ctx.sql_info.tables else ""
         return [Problem(severity="warning", table=table,
-                        description=f"深分页 LIMIT {m.group(1)}, {m.group(2)}，offset 越大越慢",
+                        description=f"深分页 offset={offset}，offset 越大越慢",
                         suggestion="改用基于主键/游标的续页，或延迟关联（先用覆盖索引取主键再 JOIN）")]
 ```
 
@@ -1066,6 +1081,14 @@ def test_select_star_no_rewrite_without_schema():
     assert rule.rewrite(ctx) is None
 
 
+def test_select_star_no_rewrite_for_multitable():
+    """多表 JOIN 时展开第一张表的列会改变结果集语义，必须放弃改写。"""
+    schema = Schema(tables={"a": TableSchema(name="a", columns={"id": "bigint"})})
+    ctx = _ctx("SELECT * FROM a JOIN b ON a.id=b.id", tables=["a", "b"],
+               columns=["*"], schema=schema)
+    assert SelectStarRule().rewrite(ctx) is None
+
+
 def test_function_on_column_check_and_rewrite():
     sql = "SELECT id FROM orders WHERE DATE(created_at)='2026-01-01'"
     ctx = _ctx(sql, tables=["orders"], columns=["id"], where=["DATE(created_at)='2026-01-01'"])
@@ -1113,14 +1136,16 @@ class SelectStarRule(Rule):
 
     def rewrite(self, ctx: RuleContext) -> str | None:
         info = ctx.sql_info
-        if info.columns != ["*"] or not info.tables or not ctx.schema:
+        # 仅单表可安全展开：多表 JOIN 时 tables[0] 的列无法代表整个结果集
+        if info.columns != ["*"] or len(info.tables) != 1 or not ctx.schema:
             return None
         table = info.tables[0]
         ts = ctx.schema.tables.get(table.lower())
         if ts is None or not ts.columns:
             return None
         cols = ", ".join(ts.columns.keys())
-        return re.sub(r"(?i)\bSELECT\s+\*", f"SELECT {cols}", info.raw_sql, count=1)
+        new_sql = re.sub(r"(?i)\bSELECT\s+\*", f"SELECT {cols}", info.raw_sql, count=1)
+        return new_sql if new_sql != info.raw_sql else None
 ```
 
 `sql_coach/local/rules/function_on_column.py`：
@@ -1248,6 +1273,38 @@ def test_optimizer_no_hit_keeps_original_sql():
     result = LocalOptimizer(rules=[SelectStarRule()]).optimize(info, Schema())
     assert result.optimized_sql == "SELECT id FROM orders WHERE id=1"
     assert result.problems == []
+
+
+def test_optimizer_composes_rewrites():
+    """select_star 与 function_on_column 必须叠加，而不是后写覆盖前写。"""
+    schema = Schema(tables={"orders": TableSchema(
+        name="orders", columns={"id": "bigint", "created_at": "datetime"})})
+    info = make_info("SELECT * FROM orders WHERE DATE(created_at)='2026-01-01'",
+                     tables=["orders"], columns=["*"],
+                     where=["DATE(created_at)='2026-01-01'"])
+    result = LocalOptimizer().optimize(info, schema)
+    assert result.optimized_sql.startswith("SELECT id, created_at FROM orders")
+    assert "created_at >= '2026-01-01 00:00:00'" in result.optimized_sql
+
+
+def test_optimizer_isolates_rewrite_and_ddls_exceptions():
+    class BoomRewrite(Rule):
+        name = "boom_rewrite"
+
+        def rewrite(self, ctx):
+            raise RuntimeError("boom")
+
+    class BoomDdls(Rule):
+        name = "boom_ddls"
+
+        def ddls(self, ctx):
+            raise RuntimeError("boom")
+
+    info = make_info("SELECT * FROM orders", tables=["orders"], columns=["*"])
+    result = LocalOptimizer(
+        rules=[BoomRewrite(), BoomDdls(), SelectStarRule()]
+    ).optimize(info, Schema())
+    assert any("SELECT *" in p.description for p in result.problems)
 ```
 
 - [ ] **Step 2: 运行确认失败**
@@ -1262,6 +1319,7 @@ Expected: FAIL（`ModuleNotFoundError: ... engine`）
 ```python
 """本地规则引擎：汇总所有规则，产出与 AI 一致的 AnalysisResult。"""
 import logging
+from dataclasses import replace
 
 from ..models import SQLInfo, AnalysisResult
 from .schema import Schema
@@ -1302,8 +1360,11 @@ class LocalOptimizer:
                 problems.extend(found)
                 hit.append(rule.name)
             new_sql = self._safe(lambda: rule.rewrite(ctx), rule.name, "rewrite", None)
-            if new_sql:
+            if new_sql and new_sql != ctx.sql_info.raw_sql:
                 optimized = new_sql
+                # 用改写后的 SQL 重建上下文，让后续规则在同一份 SQL 上叠加，而不是互相覆盖
+                ctx = RuleContext(
+                    sql_info=replace(ctx.sql_info, raw_sql=new_sql), schema=schema)
                 if rule.name not in hit:
                     hit.append(rule.name)
             ddls.extend(self._safe(lambda: rule.ddls(ctx), rule.name, "ddls", []))
