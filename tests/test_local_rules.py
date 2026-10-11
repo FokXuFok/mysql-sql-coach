@@ -94,3 +94,40 @@ def test_subquery_to_join():
     ctx = _ctx("SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)",
                tables=["users"], columns=["*"])
     assert len(SubqueryToJoinRule().check(ctx)) == 1
+
+
+from sql_coach.local.rules.select_star import SelectStarRule
+from sql_coach.local.rules.function_on_column import FunctionOnColumnRule
+
+
+def test_select_star_check_and_rewrite_with_schema():
+    schema = Schema(tables={"orders": TableSchema(
+        name="orders", columns={"id": "bigint", "status": "varchar", "amount": "decimal"})})
+    ctx = _ctx("SELECT * FROM orders WHERE status='x'",
+               tables=["orders"], columns=["*"], where=["status='x'"], schema=schema)
+    rule = SelectStarRule()
+    assert len(rule.check(ctx)) == 1
+    assert rule.rewrite(ctx) == "SELECT id, status, amount FROM orders WHERE status='x'"
+
+
+def test_select_star_no_rewrite_without_schema():
+    ctx = _ctx("SELECT * FROM orders", tables=["orders"], columns=["*"])
+    rule = SelectStarRule()
+    assert len(rule.check(ctx)) == 1
+    assert rule.rewrite(ctx) is None
+
+
+def test_function_on_column_check_and_rewrite():
+    sql = "SELECT id FROM orders WHERE DATE(created_at)='2026-01-01'"
+    ctx = _ctx(sql, tables=["orders"], columns=["id"], where=["DATE(created_at)='2026-01-01'"])
+    rule = FunctionOnColumnRule()
+    assert len(rule.check(ctx)) == 1
+    assert rule.rewrite(ctx) == (
+        "SELECT id FROM orders WHERE (created_at >= '2026-01-01 00:00:00' "
+        "AND created_at < DATE_ADD('2026-01-01', INTERVAL 1 DAY))")
+
+
+def test_function_on_column_no_rewrite_for_other_functions():
+    sql = "SELECT id FROM orders WHERE UPPER(name)='ABC'"
+    ctx = _ctx(sql, tables=["orders"], columns=["id"], where=["UPPER(name)='ABC'"])
+    assert FunctionOnColumnRule().rewrite(ctx) is None
