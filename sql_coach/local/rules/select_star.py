@@ -19,11 +19,13 @@ class SelectStarRule(Rule):
 
     def rewrite(self, ctx: RuleContext) -> str | None:
         info = ctx.sql_info
-        if info.columns != ["*"] or not info.tables or not ctx.schema:
+        # 仅单表可安全展开：多表 JOIN 时 tables[0] 的列无法代表整个结果集
+        if info.columns != ["*"] or len(info.tables) != 1 or not ctx.schema:
             return None
         table = info.tables[0]
         ts = ctx.schema.tables.get(table.lower())
         if ts is None or not ts.columns:
             return None
         cols = ", ".join(ts.columns.keys())
-        return re.sub(r"(?i)\bSELECT\s+\*", f"SELECT {cols}", info.raw_sql, count=1)
+        new_sql = re.sub(r"(?i)\bSELECT\s+\*", f"SELECT {cols}", info.raw_sql, count=1)
+        return new_sql if new_sql != info.raw_sql else None

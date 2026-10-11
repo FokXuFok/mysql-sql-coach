@@ -50,3 +50,35 @@ def test_optimizer_no_hit_keeps_original_sql():
     result = LocalOptimizer(rules=[SelectStarRule()]).optimize(info, Schema())
     assert result.optimized_sql == "SELECT id FROM orders WHERE id=1"
     assert result.problems == []
+
+
+def test_optimizer_composes_rewrites():
+    """select_star 与 function_on_column 必须叠加，而不是后写覆盖前写。"""
+    schema = Schema(tables={"orders": TableSchema(
+        name="orders", columns={"id": "bigint", "created_at": "datetime"})})
+    info = make_info("SELECT * FROM orders WHERE DATE(created_at)='2026-01-01'",
+                     tables=["orders"], columns=["*"],
+                     where=["DATE(created_at)='2026-01-01'"])
+    result = LocalOptimizer().optimize(info, schema)
+    assert result.optimized_sql.startswith("SELECT id, created_at FROM orders")
+    assert "created_at >= '2026-01-01 00:00:00'" in result.optimized_sql
+
+
+def test_optimizer_isolates_rewrite_and_ddls_exceptions():
+    class BoomRewrite(Rule):
+        name = "boom_rewrite"
+
+        def rewrite(self, ctx):
+            raise RuntimeError("boom")
+
+    class BoomDdls(Rule):
+        name = "boom_ddls"
+
+        def ddls(self, ctx):
+            raise RuntimeError("boom")
+
+    info = make_info("SELECT * FROM orders", tables=["orders"], columns=["*"])
+    result = LocalOptimizer(
+        rules=[BoomRewrite(), BoomDdls(), SelectStarRule()]
+    ).optimize(info, Schema())
+    assert any("SELECT *" in p.description for p in result.problems)

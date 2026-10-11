@@ -1,5 +1,6 @@
 """本地规则引擎：汇总所有规则，产出与 AI 一致的 AnalysisResult。"""
 import logging
+from dataclasses import replace
 
 from ..models import SQLInfo, AnalysisResult
 from .schema import Schema
@@ -40,8 +41,11 @@ class LocalOptimizer:
                 problems.extend(found)
                 hit.append(rule.name)
             new_sql = self._safe(lambda: rule.rewrite(ctx), rule.name, "rewrite", None)
-            if new_sql:
+            if new_sql and new_sql != ctx.sql_info.raw_sql:
                 optimized = new_sql
+                # 用改写后的 SQL 重建上下文，让后续规则在同一份 SQL 上叠加，而不是互相覆盖
+                ctx = RuleContext(
+                    sql_info=replace(ctx.sql_info, raw_sql=new_sql), schema=schema)
                 if rule.name not in hit:
                     hit.append(rule.name)
             ddls.extend(self._safe(lambda: rule.ddls(ctx), rule.name, "ddls", []))

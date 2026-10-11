@@ -34,7 +34,10 @@ class MissingIndexRule(Rule):
                 for col in self._columns(ctx)]
 
     def _table(self, ctx: RuleContext):
-        return ctx.sql_info.tables[0] if ctx.sql_info.tables else ""
+        # 多表 JOIN 时无法判断条件列归属哪张表，保守跳过（避免 DDL 指错表）
+        if len(ctx.sql_info.tables) != 1:
+            return ""
+        return ctx.sql_info.tables[0]
 
     def _columns(self, ctx: RuleContext) -> list[str]:
         table = self._table(ctx)
@@ -50,7 +53,7 @@ class MissingIndexRule(Rule):
         return out
 
     @staticmethod
-    def _column(cond: str):
+    def _column(cond: str) -> "str | None":
         left = _OP_SPLIT.split(cond, maxsplit=1)[0].strip().strip("` ")
         if not _IDENT.match(left):
             return None

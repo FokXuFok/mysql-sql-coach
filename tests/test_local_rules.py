@@ -82,6 +82,9 @@ def test_deep_pagination_threshold():
     assert len(DeepPaginationRule().check(ctx)) == 1
     ctx_ok = _ctx("SELECT * FROM orders LIMIT 10, 20", tables=["orders"], columns=["*"])
     assert DeepPaginationRule().check(ctx_ok) == []
+    ctx_off = _ctx("SELECT * FROM orders LIMIT 20 OFFSET 100000",
+                   tables=["orders"], columns=["*"])
+    assert len(DeepPaginationRule().check(ctx_off)) == 1
 
 
 def test_or_condition():
@@ -115,6 +118,14 @@ def test_select_star_no_rewrite_without_schema():
     rule = SelectStarRule()
     assert len(rule.check(ctx)) == 1
     assert rule.rewrite(ctx) is None
+
+
+def test_select_star_no_rewrite_for_multitable():
+    """多表 JOIN 时展开第一张表的列会改变结果集语义，必须放弃改写。"""
+    schema = Schema(tables={"a": TableSchema(name="a", columns={"id": "bigint"})})
+    ctx = _ctx("SELECT * FROM a JOIN b ON a.id=b.id", tables=["a", "b"],
+               columns=["*"], schema=schema)
+    assert SelectStarRule().rewrite(ctx) is None
 
 
 def test_function_on_column_check_and_rewrite():
