@@ -85,9 +85,9 @@ SQLCoach.analyze()  ← sql_coach/coach.py
 
 | 特征 | 分值 |
 |------|------|
-| 表数量（JOIN 数）：1 表 | 0 |
-| 2 表 | 2 |
-| ≥3 表 | 4 |
+| 表数量 = 1（单表） | 0 |
+| 表数量 = 2 | 2 |
+| 表数量 ≥ 3 | 4 |
 | 每个子查询 / 派生表 | +3 |
 | CTE（`WITH`） | +3 |
 | `UNION` / `UNION ALL` | +2 |
@@ -192,7 +192,9 @@ def select(config, sql_info, schema) -> tuple[Optimizer, str]:
    - complex → AI 引擎
 
 `Optimizer` 是本地引擎与 AI 引擎的统一接口（两者都满足 `optimize(sql_info, explain, schema, on_chunk) -> AnalysisResult`）。
-AI 引擎通过轻量适配器包住现有 `AIEngine.analyze()`，**不改动 `ai/` 任何代码**。
+
+- `LocalOptimizer` 直接实现该接口
+- `AIOptimizerAdapter`（同放在 `optimizer.py`）包住现有 `AIEngine.analyze()`，把调用透传出去，**不改动 `ai/` 任何代码**
 
 ## 7. 启动自检与分层安装
 
@@ -223,7 +225,8 @@ class CheckResult:
 
 `installer.py` 的 `AutoFixer`：
 
-- **可安全自动修复**：生成 `.env` 模板、源码模式下 `pip install` 缺失包（写进隔离 venv）
+- **可安全自动修复**：生成 `.env` 模板；**仅源码运行模式**下 `pip install` 缺失的依赖包（安装到项目 venv）
+- **打包 exe 模式**：Python 依赖已内置，该检查项直接判定为 `ok`（"已内置"），不做任何安装
 - **不可自动**：MySQL 等系统级软件，仅生成"一键命令"文本 + 下载链接，由用户确认执行
 - **绝对不做**：静默安装系统软件、提权、修改系统服务
 
