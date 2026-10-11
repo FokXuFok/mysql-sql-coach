@@ -147,14 +147,18 @@ class Rule(ABC):
 | 规则 | 文件 | risk | 说明 |
 |------|------|------|------|
 | 缺索引 | `missing_index.py` | safe | WHERE/JOIN/ORDER BY/GROUP BY 列缺索引 → `CREATE INDEX` |
-| SELECT * | `select_star.py` | safe | 建议列出必要列，减少数据传输 |
+| SELECT * | `select_star.py` | rewrite | 有 schema 时展开为显式列；无 schema 时仅建议 |
 | 前导通配 | `leading_wildcard.py` | safe | `LIKE '%x'` 无法走索引 |
-| 函数包裹索引列 | `function_on_column.py` | rewrite | `WHERE DATE(col)=...` → 范围条件 |
+| 函数包裹索引列 | `function_on_column.py` | rewrite | `WHERE DATE(col)='2026-01-01'` → 范围条件 |
 | 隐式类型转换 | `implicit_cast.py` | safe | 字符串列与数字比较 |
-| 无 LIMIT | `no_limit.py` | safe | 大表无 LIMIT 的查询 |
-| 深分页 | `deep_pagination.py` | rewrite | `LIMIT offset,n` → 延迟关联/游标 |
-| OR 条件 | `or_condition.py` | rewrite | `OR` → `UNION` |
-| 子查询转 JOIN | `subquery_to_join.py` | rewrite | `IN (SELECT ...)` → `JOIN` / `EXISTS` |
+| 无 LIMIT | `no_limit.py` | safe | 无 WHERE 且无 LIMIT 的大表查询 |
+| 深分页 | `deep_pagination.py` | safe | `LIMIT offset,n` 过大 |
+| OR 条件 | `or_condition.py` | safe | WHERE 含 OR |
+| 子查询转 JOIN | `subquery_to_join.py` | safe | `IN (SELECT ...)` |
+
+> 关于改写范围：只有**语义可静态证明等价**的才自动改写，即 `select_star`（展开列）与
+> `function_on_column`（日期范围化）。深分页 / OR→UNION / 子查询→JOIN 的改写依赖主键信息或
+> 会产生重复行语义变化，**本期只给建议、不自动改写**，避免产出错误的 SQL。
 
 ### 5.3 LocalOptimizer
 
@@ -238,11 +242,8 @@ class CheckResult:
 
 ## 8. 数据模型改动
 
-`models.py`（最小增量）：
-
-- `Report` 增加 `engine_used: str`（`"local"` 或 AI 引擎名）、`complexity: Optional[Complexity]`
-- `Config` 增加 `optimizer_mode: str`（默认 `"auto"`）、`complexity_threshold: int`（默认 8）
-- 新增 `Complexity` dataclass
+- `models.py`：新增 `Complexity` dataclass；`Config` 增加 `optimizer_mode: str`（默认 `"auto"`）、`complexity_threshold: int`（默认 8），并在 `Config.from_env()` 中读取 `OPTIMIZER_MODE` / `COMPLEXITY_THRESHOLD`
+- `coach.py`：`Report`（定义在 `coach.py`，非 `models.py`）增加 `engine_used: str`（`"local"` 或 AI 引擎名）、`complexity: Optional[Complexity]`
 
 ## 9. GUI 改动
 
@@ -348,7 +349,7 @@ sql-coach/
 ## 16. 不改动清单
 
 - `sql_coach/ai/*`（含 base / factory / deepseek / openai_adapter / ollama / mock）
-- `sql_coach/db/*`
+- `sql_coach/db/*` —— **唯一例外**：`DBConnector` / `MockConnector` 各新增一个只读 `query(sql, params) -> list[tuple]` 方法（纯增量，不改动任何现有方法的行为），供 `local/schema.py` 读 `information_schema`
 - `sql_coach/engine/*`
 - `sql_coach/report/*`
 - `sql_coach/cache.py`
