@@ -41,6 +41,7 @@ def analyze_one(coach: SQLCoach, sql: str) -> None:
         report.sql_info, report.explain,
         report.analysis, report.benchmark,
         engine_used=report.engine_used,
+        index_impact=report.index_impact,
     ))
 
     level = report.complexity.level if report.complexity else "-"

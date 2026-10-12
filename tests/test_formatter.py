@@ -132,3 +132,42 @@ def test_format_report_with_inf_speedup():
 
     output = format_report(sql_info, explain, analysis, benchmark)
     assert "无限大" in output or "inf" in output.lower()
+
+
+def test_format_report_with_index_impact():
+    """提供 index_impact 时应渲染「索引实测」一节。"""
+    from sql_coach.models import IndexImpact
+
+    sql_info, explain, analysis = _minimal_report_parts()
+    impact = IndexImpact(
+        before_time=0.244, after_time=0.245, speedup=1.0,
+        applied_ddls=["CREATE INDEX idx ON t(c);"], skipped_ddls=[],
+        rolled_back=True,
+    )
+    output = format_report(sql_info, explain, analysis, None,
+                           index_impact=impact)
+    assert "索引实测" in output
+    assert "0.244" in output
+    assert "0.245" in output
+    assert "1.0x" in output
+
+
+def test_format_report_index_impact_error_shown():
+    from sql_coach.models import IndexImpact
+
+    sql_info, explain, analysis = _minimal_report_parts()
+    impact = IndexImpact(
+        before_time=0.1, after_time=0.1, speedup=1.0,
+        applied_ddls=["CREATE INDEX idx ON t(c);"], skipped_ddls=[],
+        rolled_back=False, error="回滚失败: boom",
+    )
+    output = format_report(sql_info, explain, analysis, None,
+                           index_impact=impact)
+    assert "回滚失败" in output
+
+
+def test_format_report_default_no_index_impact_section():
+    """未传 index_impact 时不出现「索引实测」一节（保持既有行为）。"""
+    sql_info, explain, analysis = _minimal_report_parts()
+    output = format_report(sql_info, explain, analysis, None)
+    assert "索引实测" not in output

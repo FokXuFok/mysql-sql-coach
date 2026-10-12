@@ -34,7 +34,9 @@ def main():
 @click.option("--engine", "-e", default=None,
               type=click.Choice(["auto", "local", "ai"]),
               help="优化引擎: auto/local/ai")
-def analyze(sql, file, model, mock, no_cache, engine):
+@click.option("--measure-index", is_flag=True,
+              help="实测索引收益：临时建索引→复测→回滚（会改动数据库，请谨慎）")
+def analyze(sql, file, model, mock, no_cache, engine, measure_index):
     """分析并优化 SQL 语句。"""
     # Get SQL from argument or file
     if file:
@@ -50,6 +52,8 @@ def analyze(sql, file, model, mock, no_cache, engine):
         config.model = model
     if engine:
         config.optimizer_mode = engine
+    if measure_index:
+        config.measure_index = True
 
     # Connect
     console.print("\U0001f50d 正在连接 MySQL... ", end="")
@@ -80,7 +84,8 @@ def analyze(sql, file, model, mock, no_cache, engine):
     # Print report
     output = format_report(report.sql_info, report.explain,
                            report.analysis, report.benchmark,
-                           engine_used=report.engine_used)
+                           engine_used=report.engine_used,
+                           index_impact=report.index_impact)
     console.print(output)
 
     level = report.complexity.level if report.complexity else "-"

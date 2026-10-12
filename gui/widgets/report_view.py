@@ -150,6 +150,27 @@ class ReportView(QScrollArea):
         layout.addWidget(chart)
         return frame
 
+    def _build_index_impact_section(self, impact) -> Optional[QWidget]:
+        """索引实测章节（before/after/提速/是否已回滚）。"""
+        if impact is None:
+            return None
+        frame = QFrame()
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._section_label("📈 索引实测"))
+        speedup = "无限大" if impact.speedup == float("inf") else f"{impact.speedup:.1f}x"
+        rolled = len(impact.applied_ddls) if impact.rolled_back else 0
+        lines = [
+            f"建索引前: {impact.before_time:.3f}s",
+            f"建索引后: {impact.after_time:.3f}s",
+            f"实测提速: {speedup}",
+            f"已回滚创建索引: {rolled} 个",
+        ]
+        if impact.error:
+            lines.append(f"错误: {impact.error}")
+        layout.addWidget(self._code_block("\n".join(lines)))
+        return frame
+
     def _engine_badge(self, report) -> QLabel:
         """引擎 / 复杂度徽章。"""
         engine = "本地规则" if report.engine_used == "local" else report.engine_used
@@ -209,6 +230,11 @@ class ReportView(QScrollArea):
         bench_widget = self._build_benchmark_section(report.benchmark)
         if bench_widget is not None:
             self._layout.addWidget(bench_widget)
+
+        # 索引实测
+        impact_widget = self._build_index_impact_section(report.index_impact)
+        if impact_widget is not None:
+            self._layout.addWidget(impact_widget)
 
         # 撑底
         self._layout.addStretch(1)

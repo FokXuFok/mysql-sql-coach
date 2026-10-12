@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from ..models import (
-    SQLInfo, ExplainResult, AnalysisResult, BenchmarkResult, Problem
+    SQLInfo, ExplainResult, AnalysisResult, BenchmarkResult, Problem, IndexImpact
 )
 
 SEVERITY_ICONS = {
@@ -63,6 +63,7 @@ def format_report(
     analysis: AnalysisResult,
     benchmark: Optional[BenchmarkResult],
     engine_used: str = "ai",
+    index_impact: Optional[IndexImpact] = None,
 ) -> str:
     """Format full report and return as string."""
     buffer = StringIO()
@@ -113,5 +114,19 @@ def format_report(
             buf_console.print("  [bold green]提速: 无限大 🚀[/bold green]")
         else:
             buf_console.print(f"  [bold green]提速: {benchmark.speedup:.1f}x 🚀[/bold green]")
+
+    # 索引实测
+    if index_impact is not None:
+        buf_console.print("\n[bold]📈 索引实测:[/bold]")
+        buf_console.print(f"  建索引前: {index_impact.before_time:.3f}s")
+        buf_console.print(f"  建索引后: {index_impact.after_time:.3f}s")
+        if index_impact.speedup == float("inf"):
+            buf_console.print("  [bold green]实测提速: 无限大 🚀[/bold green]")
+        else:
+            buf_console.print(f"  [bold green]实测提速: {index_impact.speedup:.1f}x[/bold green]")
+        rolled = len(index_impact.applied_ddls) if index_impact.rolled_back else 0
+        buf_console.print(f"  已回滚创建索引: {rolled} 个")
+        if index_impact.error:
+            buf_console.print(f"  [red]错误: {index_impact.error}[/red]")
 
     return buffer.getvalue()

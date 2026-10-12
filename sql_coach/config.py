@@ -31,6 +31,8 @@ OLLAMA_MODEL=qwen2.5:14b
 OPTIMIZER_MODE=auto
 # 复杂度阈值（>= 该值走 AI）
 COMPLEXITY_THRESHOLD=8
+# 是否实测索引收益（会临时建索引再回滚，默认关闭）
+MEASURE_INDEX=false
 
 # 通用
 BENCHMARK_RUNS=3
@@ -47,6 +49,14 @@ def _get_env_int(key: str, default: int = 0) -> int:
         return int(os.environ.get(key, str(default)))
     except ValueError:
         return default
+
+
+def _get_env_bool(key: str, default: bool = False) -> bool:
+    """读取布尔环境变量，识别 1/true/yes/on（大小写不敏感）。"""
+    val = os.environ.get(key)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
 
 
 def load_env_file(path: str = ".env") -> None:

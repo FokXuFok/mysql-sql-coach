@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .models import (
-    Config, SQLInfo, ExplainResult, AnalysisResult, BenchmarkResult, Complexity
+    Config, SQLInfo, ExplainResult, AnalysisResult, BenchmarkResult, Complexity,
+    IndexImpact,
 )
 from .local.complexity import ComplexityScorer
 from .local.schema import Schema, SchemaProvider
@@ -16,6 +17,7 @@ from .ai.factory import create_ai_engine
 from .db.connector import DBConnector
 from .db.mock import MockConnector
 from .report.benchmark import benchmark_sqls
+from .index_experiment import measure_index_impact
 from .cache import AnalysisCache
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,7 @@ class Report:
     benchmark: Optional[BenchmarkResult]
     engine_used: str = "ai"
     complexity: Optional[Complexity] = None
+    index_impact: Optional[IndexImpact] = None
 
 
 class SQLCoach:
@@ -149,6 +152,15 @@ class SQLCoach:
         logger.debug('timing benchmark: %.2f ms', (time.perf_counter() - t) * 1000)
         if on_stage:
             on_stage("benchmark", 4, 4, "done")
+
+        # Step 5: 索引实测（可选，临时建索引 → 复测 → 回滚）
+        index_impact = None
+        if (self.config.measure_index and not self.config.mock
+                and self.db.is_connected() and analysis.index_ddls):
+            index_impact = measure_index_impact(
+                self.db, sql, analysis.index_ddls,
+                runs=self.config.benchmark_runs,
+            )
         logger.debug('timing total: %.2f ms', (time.perf_counter() - t_total) * 1000)
 
         return Report(
@@ -158,6 +170,7 @@ class SQLCoach:
             benchmark=benchmark,
             engine_used=engine_name,
             complexity=complexity,
+            index_impact=index_impact,
         )
 
     def close(self) -> None:

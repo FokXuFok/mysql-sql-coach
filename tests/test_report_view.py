@@ -119,3 +119,30 @@ def test_explanation_title_ai(app):
     view.set_report(report)
     texts = [w.text() for w in view.findChildren(QLabel)]
     assert any("AI 解释" in t for t in texts)
+
+
+def test_report_view_shows_index_impact(app):
+    """报告含 index_impact 时应渲染「索引实测」一节。"""
+    from PySide6.QtWidgets import QLabel
+    from sql_coach.models import IndexImpact
+
+    view = ReportView()
+    report = make_report()
+    report.index_impact = IndexImpact(
+        before_time=0.244, after_time=0.245, speedup=1.0,
+        applied_ddls=["CREATE INDEX idx ON t(col);"], skipped_ddls=[],
+        rolled_back=True,
+    )
+    view.set_report(report)
+    texts = [w.text() for w in view.findChildren(QLabel)]
+    assert any("索引实测" in t for t in texts)
+
+
+def test_report_view_no_index_impact_section_by_default(app):
+    """默认（无 index_impact）不应出现「索引实测」一节。"""
+    from PySide6.QtWidgets import QLabel
+
+    view = ReportView()
+    view.set_report(make_report())
+    texts = [w.text() for w in view.findChildren(QLabel)]
+    assert not any("索引实测" in t for t in texts)

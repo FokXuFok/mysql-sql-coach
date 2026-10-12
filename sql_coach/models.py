@@ -66,6 +66,18 @@ class BenchmarkResult:
 
 
 @dataclass
+class IndexImpact:
+    """索引实测结果：临时建索引 → 复测 → 回滚。"""
+    before_time: float          # 建索引前耗时（秒）
+    after_time: float           # 建索引后耗时（秒）
+    speedup: float              # before/after
+    applied_ddls: list[str]     # 实际执行成功的 DDL
+    skipped_ddls: list[str]     # 因索引已存在（或无法解析）而跳过的 DDL
+    rolled_back: bool           # 是否已成功回滚
+    error: str = ""             # 出错信息（如回滚失败）
+
+
+@dataclass
 class DBConfig:
     host: str
     port: int
@@ -85,10 +97,11 @@ class Config:
     mock: bool
     optimizer_mode: str = "ai"          # dataclass 默认保持既有行为；from_env 默认 auto
     complexity_threshold: int = 8
+    measure_index: bool = False         # 索引实测模式（默认关闭）
 
     @classmethod
     def from_env(cls, mock: bool = False) -> 'Config':
-        from .config import _get_env, _get_env_int
+        from .config import _get_env, _get_env_int, _get_env_bool
         db = DBConfig(
             host=_get_env("DB_HOST", "localhost"),
             port=_get_env_int("DB_PORT", 3306),
@@ -106,4 +119,5 @@ class Config:
             mock=mock,
             optimizer_mode=_get_env("OPTIMIZER_MODE", "auto"),
             complexity_threshold=_get_env_int("COMPLEXITY_THRESHOLD", 8),
+            measure_index=_get_env_bool("MEASURE_INDEX", False),
         )

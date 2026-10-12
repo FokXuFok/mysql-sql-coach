@@ -41,6 +41,7 @@ def test_cli_analyze_mock_mode():
     mock_report.analysis.problems = []
     mock_report.analysis.explanation = "test"
     mock_report.benchmark = None
+    mock_report.index_impact = None
 
     with patch("sql_coach.cli.SQLCoach") as mock_coach_cls, \
          patch("sql_coach.cli.pyperclip"):
@@ -87,6 +88,45 @@ def test_cli_analyze_has_engine_option():
     from sql_coach.cli import main
     result = CliRunner().invoke(main, ["analyze", "--help"])
     assert "--engine" in result.output
+
+
+def test_cli_analyze_has_measure_index_option():
+    """analyze 命令应暴露 --measure-index 开关。"""
+    from click.testing import CliRunner
+    from sql_coach.cli import main
+    result = CliRunner().invoke(main, ["analyze", "--help"])
+    assert result.exit_code == 0
+    assert "--measure-index" in result.output
+
+
+def test_cli_analyze_passes_index_impact():
+    """CLI 应把 report.index_impact 传给 format_report。"""
+    runner = CliRunner()
+    mock_report = MagicMock()
+    mock_report.sql_info.raw_sql = "SELECT * FROM t"
+    mock_report.explain = None
+    mock_report.analysis.optimized_sql = "SELECT id FROM t"
+    mock_report.analysis.index_ddls = []
+    mock_report.analysis.problems = []
+    mock_report.analysis.explanation = "test"
+    mock_report.benchmark = None
+    mock_report.engine_used = "ai"
+    mock_report.complexity = None
+    mock_report.index_impact = "SENTINEL"
+
+    with patch("sql_coach.cli.SQLCoach") as mock_coach_cls, \
+         patch("sql_coach.cli.pyperclip"), \
+         patch("sql_coach.cli.format_report") as mock_fmt:
+        mock_fmt.return_value = "报告"
+        mock_coach = MagicMock()
+        mock_coach.connect.return_value = True
+        mock_coach.analyze.return_value = mock_report
+        mock_coach_cls.return_value = mock_coach
+        result = runner.invoke(main, ["analyze", "SELECT * FROM t", "--mock"],
+                               input="2\n")
+
+    assert result.exit_code == 0
+    assert mock_fmt.call_args.kwargs.get("index_impact") == "SENTINEL"
 
 
 def test_cli_analyze_passes_engine_used():

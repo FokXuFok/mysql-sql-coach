@@ -7,7 +7,7 @@ import pytest
 from sql_coach.coach import SQLCoach, Report
 from sql_coach.models import (
     Config, DBConfig, SQLInfo, ExplainResult, ExplainRow,
-    AnalysisResult, Problem, BenchmarkResult
+    AnalysisResult, Problem, BenchmarkResult, IndexImpact
 )
 
 
@@ -108,6 +108,87 @@ def test_coach_analyze_mock_mode_skips_benchmark(mock_config_mock_mode):
         report = coach.analyze("SELECT * FROM t")
 
         assert report.benchmark is None
+
+
+def test_coach_skips_index_measure_by_default(mock_config):
+    """measure_index 默认关闭时不应触发索引实测。"""
+    assert mock_config.measure_index is False
+    with patch("sql_coach.coach.DBConnector") as mock_db_cls, \
+         patch("sql_coach.coach.create_ai_engine") as mock_ai_factory, \
+         patch("sql_coach.coach.measure_index_impact") as mock_measure:
+        mock_db = MagicMock()
+        mock_db.is_connected.return_value = True
+        mock_db.benchmark.side_effect = [2.31, 0.04]
+        mock_db_cls.return_value = mock_db
+
+        mock_ai = MagicMock()
+        mock_ai.analyze.return_value = AnalysisResult(
+            problems=[], optimized_sql="SELECT id FROM t",
+            index_ddls=["CREATE INDEX idx ON t(c);"], explanation="ok")
+        mock_ai_factory.return_value = mock_ai
+
+        coach = SQLCoach(mock_config, use_cache=False)
+        report = coach.analyze("SELECT * FROM t WHERE c=1")
+
+        assert mock_measure.call_count == 0
+        assert report.index_impact is None
+
+
+def test_coach_skips_index_measure_in_mock_mode():
+    """开启 measure_index 但处于 mock 模式时也不应触发。"""
+    db = DBConfig(host="h", port=3306, user="u", password="p", database="d")
+    config = Config(db=db, model="deepseek", deepseek_api_key="", openai_api_key="",
+                    ollama_url="http://x", benchmark_runs=3, mock=True,
+                    measure_index=True)
+    with patch("sql_coach.coach.MockConnector") as mock_db_cls, \
+         patch("sql_coach.coach.create_ai_engine") as mock_ai_factory, \
+         patch("sql_coach.coach.measure_index_impact") as mock_measure:
+        mock_db_cls.return_value = MagicMock()
+        mock_ai = MagicMock()
+        mock_ai.analyze.return_value = AnalysisResult(
+            problems=[], optimized_sql="SELECT id FROM t",
+            index_ddls=["CREATE INDEX idx ON t(c);"], explanation="ok")
+        mock_ai_factory.return_value = mock_ai
+
+        coach = SQLCoach(config, use_cache=False)
+        report = coach.analyze("SELECT * FROM t WHERE c=1")
+
+        assert mock_measure.call_count == 0
+        assert report.index_impact is None
+
+
+def test_coach_measures_index_when_enabled():
+    """开启 measure_index、非 mock、已连接且有索引建议时应触发实测并写入 Report。"""
+    db = DBConfig(host="h", port=3306, user="u", password="p", database="d")
+    config = Config(db=db, model="deepseek", deepseek_api_key="k", openai_api_key="",
+                    ollama_url="http://x", benchmark_runs=5, mock=False,
+                    measure_index=True)
+    sentinel = IndexImpact(
+        before_time=0.2, after_time=0.1, speedup=2.0,
+        applied_ddls=["CREATE INDEX idx ON t(c);"], skipped_ddls=[],
+        rolled_back=True,
+    )
+    with patch("sql_coach.coach.DBConnector") as mock_db_cls, \
+         patch("sql_coach.coach.create_ai_engine") as mock_ai_factory, \
+         patch("sql_coach.coach.measure_index_impact", return_value=sentinel) as mock_measure:
+        mock_db = MagicMock()
+        mock_db.is_connected.return_value = True
+        mock_db.benchmark.side_effect = [2.31, 0.04]
+        mock_db_cls.return_value = mock_db
+
+        mock_ai = MagicMock()
+        mock_ai.analyze.return_value = AnalysisResult(
+            problems=[], optimized_sql="SELECT id FROM t",
+            index_ddls=["CREATE INDEX idx ON t(c);"], explanation="ok")
+        mock_ai_factory.return_value = mock_ai
+
+        coach = SQLCoach(config, use_cache=False)
+        report = coach.analyze("SELECT * FROM t WHERE c=1")
+
+        assert mock_measure.call_count == 1
+        _, kwargs = mock_measure.call_args
+        assert kwargs.get("runs") == 5
+        assert report.index_impact is sentinel
 
 
 def test_coach_close(mock_config):
