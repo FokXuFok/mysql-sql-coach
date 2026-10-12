@@ -62,7 +62,8 @@ def test_fix_without_config_respects_outcome(monkeypatch):
 
     monkeypatch.setattr(
         mod, "apply_auto_fixes",
-        lambda results, env_path: [FixOutcome("配置文件 .env", False, "生成失败: 无权限")],
+        lambda results, env_path: [FixOutcome("配置文件 .env", False, "生成失败: 无权限",
+                                              key="env_file")],
     )
     dlg = DiagnosticsDialog(
         [CheckResult("配置文件 .env", "warn", "缺失",
@@ -81,7 +82,28 @@ def test_fix_without_config_applied_marks_ok(monkeypatch):
 
     monkeypatch.setattr(
         mod, "apply_auto_fixes",
-        lambda results, env_path: [FixOutcome("配置文件 .env", True, "已生成模板")],
+        lambda results, env_path: [FixOutcome("配置文件 .env", True, "已生成模板",
+                                              key="env_file")],
+    )
+    dlg = DiagnosticsDialog(
+        [CheckResult("配置文件 .env", "warn", "缺失",
+                     auto_fixable=True, key="env_file")],
+        env_path=".env", config=None,
+    )
+    dlg._on_fix()
+    assert dlg.results[0].status == "ok"
+
+
+def test_fix_matches_by_key_not_display_name(monkeypatch):
+    """M6: 即使展示名不同，只要 key 匹配就应标为已修复。"""
+    _app()
+    from gui.widgets import diagnostics_dialog as mod
+    from sql_coach.diagnostics.installer import FixOutcome
+
+    monkeypatch.setattr(
+        mod, "apply_auto_fixes",
+        lambda results, env_path: [FixOutcome("重命名后的展示名", True, "已生成模板",
+                                              key="env_file")],
     )
     dlg = DiagnosticsDialog(
         [CheckResult("配置文件 .env", "warn", "缺失",

@@ -2,6 +2,7 @@
 import os
 import sys
 from dataclasses import dataclass
+from importlib.util import find_spec
 
 from ..models import Config
 
@@ -87,9 +88,11 @@ def check_runtime() -> CheckResult:
     if not getattr(sys, "frozen", False):
         missing = []
         for mod in ("PySide6", "matplotlib"):
+            # 只探测是否存在，不真正 import：matplotlib 延迟加载以省启动时间。
             try:
-                __import__(mod)
-            except ImportError:
+                if find_spec(mod) is None:
+                    missing.append(mod)
+            except (ImportError, ValueError):
                 missing.append(mod)
         if missing:
             return CheckResult("运行环境", "warn",

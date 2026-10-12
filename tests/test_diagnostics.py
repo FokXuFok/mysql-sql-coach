@@ -53,19 +53,42 @@ def test_check_runtime_ok():
 
 def test_check_runtime_missing_dep_warns(monkeypatch):
     """源码模式下缺少 GUI/绘图依赖时应降级为 warn 并给出 pip 指引。"""
-    import builtins
-    real_import = builtins.__import__
+    from sql_coach.diagnostics import checks
 
-    def fake_import(name, *args, **kwargs):
-        if name in ("PySide6", "matplotlib"):
-            raise ImportError(name)
-        return real_import(name, *args, **kwargs)
+    def fake_find_spec(name):
+        return None if name in ("PySide6", "matplotlib") else object()
 
-    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(checks, "find_spec", fake_find_spec)
     r = check_runtime()
     assert r.status == "warn"
     assert "PySide6" in r.message and "matplotlib" in r.message
     assert r.fix_hint == "pip install PySide6 matplotlib"
+
+
+def test_check_runtime_uses_find_spec_without_import(monkeypatch):
+    """M4: 依赖探测用 find_spec 判断存在性，不真正 import（省启动时间）。"""
+    from sql_coach.diagnostics import checks
+
+    seen = []
+
+    def fake_find_spec(name):
+        seen.append(name)
+        return object()  # 非 None 视为已安装
+
+    monkeypatch.setattr(checks, "find_spec", fake_find_spec)
+
+    import builtins
+    real_import = builtins.__import__
+
+    def _no_import(name, *args, **kwargs):
+        if name in ("PySide6", "matplotlib"):
+            raise AssertionError(f"check_runtime 不应真正 import {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_import)
+    r = checks.check_runtime()
+    assert r.status == "ok"
+    assert "PySide6" in seen and "matplotlib" in seen
 
 
 def test_check_ai_ollama_probe_disabled_by_default():

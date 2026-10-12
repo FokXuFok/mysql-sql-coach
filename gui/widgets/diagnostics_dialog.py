@@ -92,10 +92,10 @@ class DiagnosticsDialog(QDialog):
             self.results = run_all(self.config, self.env_path)
         else:
             # 无 config 时无法重跑自检，只能依据实际修复结果标记：
-            # 仅 applied=True 且 name 匹配的项才视为已修复。
-            fixed = {o.name for o in outcomes if o.applied}
+            # 仅 applied=True 且 key 匹配的项才视为已修复（不依赖展示名）。
+            fixed_keys = {o.key for o in outcomes if o.applied}
             self.results = [
-                CheckResult(r.name, "ok", "已修复") if r.auto_fixable and r.name in fixed
+                CheckResult(r.name, "ok", "已修复") if r.auto_fixable and r.key in fixed_keys
                 else r
                 for r in self.results
             ]

@@ -11,6 +11,7 @@ class FixOutcome:
     name: str
     applied: bool
     message: str
+    key: str = ""      # 机器可读标识，供上层按 key 匹配而非展示名
 
 
 def apply_auto_fixes(results: list[CheckResult], env_path: str = ".env") -> list[FixOutcome]:
@@ -26,13 +27,13 @@ def apply_auto_fixes(results: list[CheckResult], env_path: str = ".env") -> list
 
 def _create_env_file(env_path: str) -> FixOutcome:
     if os.path.exists(env_path):
-        return FixOutcome("配置文件 .env", False, "已存在，跳过")
+        return FixOutcome("配置文件 .env", False, "已存在，跳过", key="env_file")
     try:
         with open(env_path, "w", encoding="utf-8") as f:
             f.write(ENV_TEMPLATE)
-        return FixOutcome("配置文件 .env", True, f"已生成模板: {env_path}")
+        return FixOutcome("配置文件 .env", True, f"已生成模板: {env_path}", key="env_file")
     except OSError as e:
-        return FixOutcome("配置文件 .env", False, f"生成失败: {e}")
+        return FixOutcome("配置文件 .env", False, f"生成失败: {e}", key="env_file")
 
 
 def copy_hint(hint: str) -> bool:
