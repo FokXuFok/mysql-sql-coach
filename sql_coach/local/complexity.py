@@ -47,7 +47,7 @@ class ComplexityScorer:
         self.threshold = max(1, threshold)
 
     def score(self, sql_info: SQLInfo) -> Complexity:
-        sql = sql_info.raw_sql or ""
+        sql = sql_info.clean_sql
         upper = sql.upper()
         s = 0
         reasons: list[str] = []

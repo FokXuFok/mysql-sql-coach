@@ -12,7 +12,7 @@ class LeadingWildcardRule(Rule):
     risk = "safe"
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        if not _PAT.search(ctx.sql_info.raw_sql or ""):
+        if not _PAT.search(ctx.sql_info.nocomment_sql):
             return []
         table = ctx.sql_info.tables[0] if ctx.sql_info.tables else ""
         return [Problem(severity="warning", table=table,

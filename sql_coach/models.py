@@ -13,6 +13,18 @@ class SQLInfo:
     join_tables: list[str]
     order_by: list[str]
 
+    @property
+    def nocomment_sql(self) -> str:
+        """去掉注释、保留字面量内容（供需要匹配字面量的规则使用）。"""
+        from .sql_text import strip_comments
+        return strip_comments(self.raw_sql or "")
+
+    @property
+    def clean_sql(self) -> str:
+        """去掉注释并清空字面量内容（供关键字类规则使用）。"""
+        from .sql_text import clean
+        return clean(self.raw_sql or "")
+
 
 @dataclass
 class ExplainRow:

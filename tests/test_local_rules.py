@@ -322,3 +322,78 @@ def test_redundant_distinct_no_false_positive_across_subquery_layers():
 def test_redundant_distinct_same_layer_still_detected():
     ctx = _ctx("SELECT DISTINCT a FROM t GROUP BY a", tables=["t"], columns=["a"])
     assert len(RedundantDistinctRule().check(ctx)) == 1
+
+
+# --- 解析层重构：既有规则盲区修复（改用 clean_sql / nocomment_sql） ---
+
+def test_or_condition_ignores_literal_and_comment():
+    """OR 仅出现在字面量/注释里时不应误报；真 OR 条件仍需命中。"""
+    literal = _ctx("SELECT * FROM orders WHERE note = 'x OR y' AND a=1",
+                   tables=["orders"], columns=["*"], where=["note = 'x OR y'", "a=1"])
+    assert OrConditionRule().check(literal) == []
+    comment = _ctx("SELECT * FROM orders WHERE a=1 -- x OR y",
+                   tables=["orders"], columns=["*"], where=["a=1", "b=2"])
+    assert OrConditionRule().check(comment) == []
+    positive = _ctx("SELECT * FROM orders WHERE a=1 OR b=2",
+                    tables=["orders"], columns=["*"], where=["a=1", "b=2"])
+    assert len(OrConditionRule().check(positive)) == 1
+
+
+def test_no_limit_ignores_literal_limit():
+    """字面量里的 LIMIT 不应被误判为已带 LIMIT。"""
+    ctx = _ctx("SELECT * FROM t WHERE note = 'LIMIT 10'",
+               tables=["t"], columns=["*"], where=[])
+    assert len(NoLimitRule().check(ctx)) == 1
+    ctx_ok = _ctx("SELECT * FROM t LIMIT 10", tables=["t"], columns=["*"])
+    assert NoLimitRule().check(ctx_ok) == []
+
+
+def test_deep_pagination_ignores_literal_and_comment():
+    """字面量/注释里的 LIMIT offset 不应触发深分页告警。"""
+    literal = _ctx("SELECT * FROM t WHERE note = 'LIMIT 100000, 20'",
+                   tables=["t"], columns=["*"])
+    assert DeepPaginationRule().check(literal) == []
+    comment = _ctx("SELECT * FROM t -- LIMIT 100000, 20", tables=["t"], columns=["*"])
+    assert DeepPaginationRule().check(comment) == []
+    positive = _ctx("SELECT * FROM orders LIMIT 100000, 20", tables=["orders"], columns=["*"])
+    assert len(DeepPaginationRule().check(positive)) == 1
+
+
+def test_subquery_to_join_ignores_literal_and_comment():
+    """字面量/注释里的 IN (SELECT ...) 不应误报。"""
+    literal = _ctx("SELECT * FROM users WHERE note = 'x IN (SELECT y)'",
+                   tables=["users"], columns=["*"])
+    assert SubqueryToJoinRule().check(literal) == []
+    comment = _ctx("SELECT * FROM users -- IN (SELECT y)", tables=["users"], columns=["*"])
+    assert SubqueryToJoinRule().check(comment) == []
+    positive = _ctx("SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)",
+                    tables=["users"], columns=["*"])
+    assert len(SubqueryToJoinRule().check(positive)) == 1
+
+
+def test_union_negation_distinct_no_regression():
+    """改用 clean_sql 后，既有正例仍命中、字面量反例仍不命中。"""
+    union_ok = _ctx("SELECT a FROM t UNION SELECT a FROM t2", tables=["t"], columns=["a"])
+    assert len(UnionDedupRule().check(union_ok)) == 1
+    union_bad = _ctx("SELECT a FROM t WHERE note = 'x UNION y'", tables=["t"], columns=["a"])
+    assert UnionDedupRule().check(union_bad) == []
+
+    neg_ok = _ctx("SELECT * FROM t WHERE a != 1", tables=["t"], columns=["*"], where=["a"])
+    assert len(NegationRule().check(neg_ok)) == 1
+    neg_bad = _ctx("SELECT * FROM t WHERE note = 'a != b'",
+                   tables=["t"], columns=["*"], where=["a"])
+    assert NegationRule().check(neg_bad) == []
+
+    distinct_ok = _ctx("SELECT DISTINCT a FROM t GROUP BY a", tables=["t"], columns=["a"])
+    assert len(RedundantDistinctRule().check(distinct_ok)) == 1
+    distinct_bad = _ctx("SELECT a FROM t WHERE note='SELECT DISTINCT x' GROUP BY a",
+                        tables=["t"], columns=["a"])
+    assert RedundantDistinctRule().check(distinct_bad) == []
+
+
+def test_leading_wildcard_ignores_comment_keeps_literal():
+    """前导通配需匹配字面量（nocomment_sql 保留字面量），但注释里的 LIKE 不应命中。"""
+    hit = _ctx("SELECT id FROM users WHERE name LIKE '%abc'", tables=["users"], columns=["id"])
+    assert len(LeadingWildcardRule().check(hit)) == 1
+    comment = _ctx("SELECT id FROM users -- LIKE '%x'", tables=["users"], columns=["id"])
+    assert LeadingWildcardRule().check(comment) == []

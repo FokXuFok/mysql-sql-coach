@@ -3,7 +3,6 @@ import re
 
 from ...models import Problem
 from .base import Rule, RuleContext
-from ._text import clean
 
 # 显式枚举否定运算符，而非裸匹配 \bNOT\b：这样 IS NOT NULL 不会被误判为否定条件。
 # != / <> 均为两字符运算符，不会成为其它运算符（如 <=>、>=）的子串，天然具备词法边界。
@@ -15,7 +14,7 @@ class NegationRule(Rule):
     risk = "safe"  # 正向改写可能改变语义（尤其 NULL 语义），本期仅建议
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        sql = clean(ctx.sql_info.raw_sql or "")
+        sql = ctx.sql_info.clean_sql
         if not _PAT.search(sql):
             return []
         table = ctx.sql_info.tables[0] if ctx.sql_info.tables else ""

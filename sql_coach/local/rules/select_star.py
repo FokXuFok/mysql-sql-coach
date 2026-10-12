@@ -27,5 +27,7 @@ class SelectStarRule(Rule):
         if ts is None or not ts.columns:
             return None
         cols = ", ".join(ts.columns.keys())
-        new_sql = re.sub(r"(?i)\bSELECT\s+\*", f"SELECT {cols}", info.raw_sql, count=1)
-        return new_sql if new_sql != info.raw_sql else None
+        # 基于 nocomment_sql 替换：避免把注释里的 SELECT * 当成目标改写
+        src = info.nocomment_sql
+        new_sql = re.sub(r"(?i)\bSELECT\s+\*", f"SELECT {cols}", src, count=1)
+        return new_sql if new_sql != src else None

@@ -1,8 +1,12 @@
-"""SQL 文本清洗工具：供规则在正则匹配前剥离注释与字符串字面量，避免误报。
+"""SQL 文本清洗工具：剥离注释与字符串字面量，供解析产物（SQLInfo）与规则使用。
 
-注意：仅用于「不应命中字面量/注释内容」的规则（如 negation / order_by_rand /
-union_dedup / redundant_distinct）。需要匹配字面量内容的规则（如 leading_wildcard
-的 LIKE '%x'、function_on_column 的 DATE(col)='2026-01-01'）不要使用本模块。
+- ``strip_comments``：去掉 ``--``/``/* */`` 注释（跳过引号内文本）。
+- ``strip_literals``：清空字符串字面量内容、保留引号本身。
+- ``clean``：先去注释再清字面量，供「关键字类」规则匹配前使用。
+
+需要匹配字面量内容的规则（如 leading_wildcard 的 LIKE '%x'、
+function_on_column 的 DATE(col)='2026-01-01'）不要使用 ``clean``，
+应使用只去注释的 ``strip_comments``。
 """
 
 _QUOTES = ("'", '"')
@@ -77,5 +81,5 @@ def strip_literals(sql: str) -> str:
 
 
 def clean(sql: str) -> str:
-    """先剥离注释，再清空字面量内容，供规则在正则匹配前调用。"""
+    """先剥离注释，再清空字面量内容，供关键字类规则在正则匹配前调用。"""
     return strip_literals(strip_comments(sql or ""))

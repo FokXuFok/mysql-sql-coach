@@ -3,7 +3,6 @@ import re
 
 from ...models import Problem
 from .base import Rule, RuleContext
-from ._text import clean
 
 _DISTINCT_PAT = re.compile(r"\bSELECT\s+DISTINCT\b", re.IGNORECASE)
 _GROUP_BY_PAT = re.compile(r"\bGROUP\s+BY\b", re.IGNORECASE)
@@ -16,7 +15,7 @@ class RedundantDistinctRule(Rule):
     risk = "safe"
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        sql = clean(ctx.sql_info.raw_sql or "")
+        sql = ctx.sql_info.clean_sql
         # 含嵌套子查询时，DISTINCT 与 GROUP BY 可能分处内外层，宁可漏报也不误报
         if _SUBQUERY_PAT.search(sql):
             return []

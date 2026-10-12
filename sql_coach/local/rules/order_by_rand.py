@@ -3,7 +3,6 @@ import re
 
 from ...models import Problem
 from .base import Rule, RuleContext
-from ._text import clean
 
 # 兼容大小写与 RAND() 前后空格
 _PAT = re.compile(r"\bORDER\s+BY\s+RAND\s*\(\s*\)", re.IGNORECASE)
@@ -14,7 +13,7 @@ class OrderByRandRule(Rule):
     risk = "safe"  # 随机取数需在应用层或改用主键区间，本期仅建议
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        sql = clean(ctx.sql_info.raw_sql or "")
+        sql = ctx.sql_info.clean_sql
         if not _PAT.search(sql):
             return []
         table = ctx.sql_info.tables[0] if ctx.sql_info.tables else ""

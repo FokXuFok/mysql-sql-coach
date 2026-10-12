@@ -12,7 +12,7 @@ class OrConditionRule(Rule):
     risk = "safe"  # OR->UNION 存在语义风险，本期仅建议
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        sql = ctx.sql_info.raw_sql or ""
+        sql = ctx.sql_info.clean_sql
         if not _PAT.search(sql) or len(ctx.sql_info.where_conditions) < 2:
             return []
         table = ctx.sql_info.tables[0] if ctx.sql_info.tables else ""

@@ -30,7 +30,7 @@ class FunctionOnColumnRule(Rule):
         return out
 
     def rewrite(self, ctx: RuleContext) -> str | None:
-        sql = ctx.sql_info.raw_sql or ""
+        sql = ctx.sql_info.nocomment_sql
         if not sql:
             return None
 

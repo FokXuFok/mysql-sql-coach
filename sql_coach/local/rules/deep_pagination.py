@@ -14,7 +14,7 @@ class DeepPaginationRule(Rule):
     risk = "safe"  # 自动改写需主键信息，本期仅建议
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        sql = ctx.sql_info.raw_sql or ""
+        sql = ctx.sql_info.clean_sql
         offset = None
         m = _COMMA_PAT.search(sql)
         if m:

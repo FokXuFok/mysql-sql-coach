@@ -124,3 +124,14 @@ def test_correlated_subquery_not_specially_penalized():
     # 2 表(+2) + 1 个子查询(+3) + 聚合函数 COUNT(+2) = 7，无"相关子查询"专项加分
     assert c.score == 7
     assert all("相关子查询" not in r for r in c.reasons)
+
+
+def test_literal_keyword_does_not_raise_complexity():
+    """字面量里的 UNION/SELECT 等关键字不应被计入复杂度（既有盲区修复）。"""
+    info = make_info("SELECT a FROM t WHERE note='UNION'",
+                     tables=["t"], columns=["a"], where=["note='UNION'"])
+    c = ComplexityScorer().score(info)
+    assert "UNION" not in c.reasons
+    plain = make_info("SELECT a FROM t WHERE note='x'",
+                      tables=["t"], columns=["a"], where=["note='x'"])
+    assert ComplexityScorer().score(plain).score == c.score
