@@ -228,3 +228,66 @@ for sql in ['SELECT * FROM orders WHERE status=\'pending\'',
     print(r.engine_used, r.complexity.level, r.complexity.score)
 "
 ```
+
+---
+
+## 五、本轮追加（2026-10-12 下午）
+
+### 5.1 push
+已推送 `master` 到 `origin`（`6d8c77a..dd7242d`，随后含本轮新提交）。
+注意：本机 git 的 `credential.helper=helper-selector` 在非交互环境下会挂起，
+推送时用 `gh auth token` 做一次性凭据注入（需先用 `-c credential.helper=` 清空原 helper 列表）：
+```bash
+export GH_TOKEN=$(gh auth token)
+git -c credential.helper= -c credential.helper='!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' push origin master
+```
+
+### 5.2 真实 MySQL 端到端 + 索引收益实测（`test` 库，orders 10 万行）
+工具输出正确：`EXPLAIN type=ALL rows=100070`、识别"status 缺索引"、给出
+`CREATE INDEX idx_orders_status ON orders(status);`。
+
+**但实测暴露一个重要事实——索引收益取决于选择性：**
+
+| 谓词 | 命中行数 | 选择性 | 建索引前 | 建索引后 | 提速 |
+|------|---------|--------|---------|---------|------|
+| `status='pending'` | 33,225 | 33.2% | 243.5 ms | 244.0 ms | **1.0x** |
+| `amount>999.5` | 50 | 0.05% | 36.7 ms | 0.7 ms | **54.4x** |
+
+低选择性时 MySQL 即便用了索引（`type=ref`）也要回表 3.3 万次，成本≈全表扫描。
+README 宣称的"50-100x"只在**高选择性**谓词上成立。
+（实测后已删除所建索引，测试库恢复"故意无索引"的初始状态。）
+
+### 5.3 重打包并试跑 exe
+- 重新构建 `dist-onefile/sql-coach-gui.exe`（83MB，含本轮全部修复）。
+- **exe 同目录无 `.env`** → 按设计降级到模拟模式，进程正常存活、不崩溃（stderr 提示
+  `Access denied ... (using password: NO)`，符合预期）。
+- **放入 `.env` 后** → 启动成功且 **stderr 无任何连接错误**，说明真实连库正常。
+  （验证用的 `.env` 副本已删除，未留在产物目录。）
+
+### 5.4 扩展本地规则（9 条 → 13 条）
+新增 4 条（全部 `risk="safe"`，只建议不改写）：
+- `negation.py` 否定条件（`!=`/`<>`/`NOT IN`/`NOT LIKE`/`NOT EXISTS`）无法有效用索引
+- `order_by_rand.py` `ORDER BY RAND()` 全表随机排序
+- `union_dedup.py` `UNION` 去重开销（排除 `UNION ALL`）
+- `redundant_distinct.py` `SELECT DISTINCT` 与 `GROUP BY` 同层冗余
+
+审查实测发现并修复了 2 类**用户可见误报**：
+1. 字符串字面量/注释内的关键字被误判（如 `note='a!=b'`、`-- a != 1`）
+   → 新增 `sql_coach/local/rules/_text.py`（`strip_comments` / `strip_literals` / `clean`），
+   4 条新规则匹配前先 `clean()`；**未**动 `leading_wildcard`/`function_on_column`（它们需要匹配字面量内容）。
+2. `RedundantDistinctRule` 跨层子查询误报（DISTINCT 与 GROUP BY 分处内外层）
+   → 含 `(SELECT` 时保守返回空（宁可漏报不误报）。
+
+全量测试：**253 passed**。
+
+### 5.5 发现的产品改进点（尚未做，供后续参考）
+1. **管线内 benchmark 对"建议索引"类问题恒为 ~1.0x**：它比较的是"原 SQL vs 改写后 SQL"，
+   而索引建议的价值在"建索引前后"。建议：当 `index_ddls` 非空时，可提供
+   "建索引→复测→回滚"的实测模式（或至少在报告里说明该数字不含索引收益）。
+2. **索引建议不考虑选择性**：如上表，33% 选择性的列上建索引几乎无效。
+   建议在生成 DDL 时附提示（如"该条件选择性可能较低，索引收益有限"），
+   或提供基于 `SELECT COUNT(*)` 的选择性估算。
+3. **`SELECT *` 展开的列顺序不是表原始顺序**：`SchemaProvider` 读 `information_schema.COLUMNS`
+   未加 `ORDER BY ORDINAL_POSITION`，导致改写后列序可能变化（语义等价，但不美观）。
+4. 既有 `or_condition` / `no_limit` / `leading_wildcard` 等规则仍有"字面量/注释盲区"，
+   可考虑统一接入 `_text.clean`（注意 `leading_wildcard` 需保留字面量匹配）。
