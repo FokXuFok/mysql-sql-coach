@@ -38,3 +38,55 @@ def test_dialog_skip_writes_marker(tmp_path, monkeypatch):
     dlg.dont_ask.setChecked(True)
     dlg._on_skip()
     assert (tmp_path / ".skip_diagnostics").exists()
+
+
+def test_copy_failure_shows_feedback(monkeypatch):
+    """M7: 复制失败时按钮给出可见反馈。"""
+    _app()
+    from gui.widgets import diagnostics_dialog as mod
+    monkeypatch.setattr(mod, "copy_hint", lambda hint: False)
+    dlg = DiagnosticsDialog(
+        [CheckResult("MySQL 连接", "fail", "连不上",
+                     fix_hint="winget install Oracle.MySQL")],
+        env_path=".env",
+    )
+    dlg._on_copy()
+    assert "失败" in dlg.copy_button.text()
+
+
+def test_fix_without_config_respects_outcome(monkeypatch):
+    """M8: config 为 None 时，只有真正 applied 的项才标为 ok。"""
+    _app()
+    from gui.widgets import diagnostics_dialog as mod
+    from sql_coach.diagnostics.installer import FixOutcome
+
+    monkeypatch.setattr(
+        mod, "apply_auto_fixes",
+        lambda results, env_path: [FixOutcome("配置文件 .env", False, "生成失败: 无权限")],
+    )
+    dlg = DiagnosticsDialog(
+        [CheckResult("配置文件 .env", "warn", "缺失",
+                     auto_fixable=True, key="env_file")],
+        env_path=".env", config=None,
+    )
+    dlg._on_fix()
+    assert dlg.results[0].status != "ok"
+
+
+def test_fix_without_config_applied_marks_ok(monkeypatch):
+    """M8: applied=True 的项才标为 ok。"""
+    _app()
+    from gui.widgets import diagnostics_dialog as mod
+    from sql_coach.diagnostics.installer import FixOutcome
+
+    monkeypatch.setattr(
+        mod, "apply_auto_fixes",
+        lambda results, env_path: [FixOutcome("配置文件 .env", True, "已生成模板")],
+    )
+    dlg = DiagnosticsDialog(
+        [CheckResult("配置文件 .env", "warn", "缺失",
+                     auto_fixable=True, key="env_file")],
+        env_path=".env", config=None,
+    )
+    dlg._on_fix()
+    assert dlg.results[0].status == "ok"

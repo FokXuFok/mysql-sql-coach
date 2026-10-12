@@ -87,19 +87,29 @@ class DiagnosticsDialog(QDialog):
                 self._inner_layout.addWidget(hint)
 
     def _on_fix(self) -> None:
-        apply_auto_fixes(self.results, self.env_path)
+        outcomes = apply_auto_fixes(self.results, self.env_path)
         if self.config is not None:
             self.results = run_all(self.config, self.env_path)
         else:
-            self.results = [CheckResult(r.name, "ok", r.message) if r.auto_fixable
-                            else r for r in self.results]
+            # 无 config 时无法重跑自检，只能依据实际修复结果标记：
+            # 仅 applied=True 且 name 匹配的项才视为已修复。
+            fixed = {o.name for o in outcomes if o.applied}
+            self.results = [
+                CheckResult(r.name, "ok", "已修复") if r.auto_fixable and r.name in fixed
+                else r
+                for r in self.results
+            ]
         self.fix_button.setEnabled(False)
         self._render()
 
     def _on_copy(self) -> None:
         hints = "\n".join(r.fix_hint for r in self.results if r.fix_hint)
-        if hints and copy_hint(hints):
+        if not hints:
+            return
+        if copy_hint(hints):
             self.copy_button.setText("✅ 已复制")
+        else:
+            self.copy_button.setText("❌ 复制失败，请手动选择命令")
 
     def _on_skip(self) -> None:
         if self.dont_ask.isChecked():

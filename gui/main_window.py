@@ -148,12 +148,25 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage("DB: 已连接")
             else:
                 self.config.mock = True
-                QMessageBox.warning(self, "数据库连接失败", "已切换到模拟模式")
+                self._show_db_fallback("已切换到模拟模式")
                 self.status_bar.showMessage("DB: 模拟模式")
         except Exception as e:
             self.config.mock = True
-            QMessageBox.warning(self, "数据库连接失败", f"已切换到模拟模式\n错误: {e}")
+            self._show_db_fallback(f"已切换到模拟模式\n错误: {e}")
             self.status_bar.showMessage("DB: 模拟模式")
+
+    def _show_db_fallback(self, message: str) -> None:
+        """非模态提示连库失败。
+
+        用非模态 ``show()`` 而非模态 ``QMessageBox.warning``：后者会进入
+        嵌套事件循环，在无数据库的环境（如 CI）会阻塞启动。
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("数据库连接失败")
+        box.setText(message)
+        box.setIcon(QMessageBox.Warning)
+        self._db_fallback_box = box  # 保持引用, 防止被 GC
+        box.show()
 
     def _on_analyze(self) -> None:
         """工具栏分析按钮回调。"""
