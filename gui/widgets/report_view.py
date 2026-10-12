@@ -166,6 +166,13 @@ class ReportView(QScrollArea):
             f"实测提速: {speedup}",
             f"已回滚创建索引: {rolled} 个",
         ]
+        if impact.verdict:
+            lines.append(f"结论: {impact.verdict}")
+        if impact.selectivity >= 0:
+            lines.append(
+                f"命中率: {impact.selectivity * 100:.2f}%"
+                f"（{impact.matched_rows}/{impact.total_rows} 行）"
+            )
         if impact.error:
             lines.append(f"错误: {impact.error}")
         layout.addWidget(self._code_block("\n".join(lines)))

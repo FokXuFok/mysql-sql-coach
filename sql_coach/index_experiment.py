@@ -12,6 +12,11 @@ from .models import IndexImpact
 
 logger = logging.getLogger(__name__)
 
+# 收益守卫阈值：实测提速低于该值判为「不建议创建」。
+# 依据真实 MySQL 选择性扫描：约 1%~5% 命中率处索引失效（5.25x → 1.15x），
+# 1.3 落在 1.15x 与 5.25x 之间。
+INDEX_SPEEDUP_THRESHOLD = 1.3
+
 # 匹配 CREATE INDEX [IF NOT EXISTS] <idx> ON <tbl>，兼容反引号与大小写。
 _CREATE_INDEX_RE = re.compile(
     r"^\s*CREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?"
@@ -62,6 +67,52 @@ def _index_exists(conn, table: str, index_name: str) -> bool:
         logger.debug("检查索引是否存在失败，按不存在处理: %s", e)
         return False
     return bool(rows)
+
+
+def _first_table(ddls: list[str]) -> Optional[str]:
+    """从 DDL 列表中取第一个可解析的表名；无法解析时返回 None。"""
+    for ddl in ddls:
+        parsed = parse_create_index(ddl)
+        if parsed is not None:
+            return parsed[1]
+    return None
+
+
+def _estimate_selectivity(conn, sql: str, table: Optional[str],
+                          ) -> tuple[int, int, float]:
+    """best-effort 估算命中率，任何失败都置为未知（不影响主流程）。
+
+    Returns:
+        (matched_rows, total_rows, selectivity)，未知项分别为 0/0/-1.0。
+    """
+    total_rows = 0
+    if table:
+        try:
+            rows = conn.query(
+                "SELECT TABLE_ROWS FROM information_schema.TABLES "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
+                (table,),
+            )
+            if rows:
+                total_rows = int(rows[0][0] or 0)
+        except Exception as e:  # best-effort：失败置为未知
+            logger.debug("查询表总行数失败（忽略）: %s", e)
+
+    matched_rows = 0
+    matched_known = False
+    if sql and sql.strip().upper().startswith("SELECT"):
+        try:
+            rows = conn.query(f"SELECT COUNT(*) FROM ({sql}) AS _probe", ())
+            if rows:
+                matched_rows = int(rows[0][0] or 0)
+                matched_known = True
+        except Exception as e:  # best-effort：失败置为未知
+            logger.debug("探测命中行数失败（忽略）: %s", e)
+
+    selectivity = -1.0
+    if matched_known and total_rows > 0:
+        selectivity = matched_rows / total_rows
+    return matched_rows, total_rows, selectivity
 
 
 def measure_index_impact(conn, sql: str, ddls: list[str],
@@ -136,6 +187,23 @@ def measure_index_impact(conn, sql: str, ddls: list[str],
     else:
         speedup = float("inf") if before_time > 0 else 1.0
 
+    # best-effort 估算选择性（回滚后进行，反映原始查询的命中率）。
+    matched_rows, total_rows, selectivity = _estimate_selectivity(
+        conn, sql, _first_table(ddls))
+
+    recommended = speedup >= INDEX_SPEEDUP_THRESHOLD
+    if recommended:
+        if speedup == float("inf"):
+            verdict = "索引有效（实测提速 无限大），建议采纳"
+        else:
+            verdict = f"索引有效（实测提速 {speedup:.1f}x），建议采纳"
+    else:
+        if selectivity >= 0:
+            verdict = (f"索引收益有限（实测提速 {speedup:.2f}x，"
+                       f"命中率约 {selectivity * 100:.1f}%），不建议创建")
+        else:
+            verdict = f"索引收益有限（实测提速 {speedup:.2f}x），不建议创建"
+
     return IndexImpact(
         before_time=before_time,
         after_time=after_time,
@@ -144,4 +212,9 @@ def measure_index_impact(conn, sql: str, ddls: list[str],
         skipped_ddls=skipped_ddls,
         rolled_back=rolled_back,
         error=error,
+        matched_rows=matched_rows,
+        total_rows=total_rows,
+        selectivity=selectivity,
+        recommended=recommended,
+        verdict=verdict,
     )

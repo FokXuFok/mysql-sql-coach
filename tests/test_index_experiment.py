@@ -12,21 +12,41 @@ class FakeConnector:
     """测试用最小连接器替身，记录执行过的语句。"""
 
     def __init__(self, connected=True, existing_indexes=None,
-                 fail_on=None, benchmark_times=None, query_raises=False):
+                 fail_on=None, benchmark_times=None, query_raises=False,
+                 total_rows=None, matched_rows=None,
+                 count_raises=False, total_raises=False):
         self.connected = connected
         self.existing_indexes = set(existing_indexes or [])
         self.fail_on = fail_on
         self.benchmark_times = list(benchmark_times) if benchmark_times else [0.2, 0.05]
         self.query_raises = query_raises
+        self.total_rows = total_rows
+        self.matched_rows = matched_rows
+        self.count_raises = count_raises
+        self.total_raises = total_raises
         self.executed = []
+        self.queries = []
         self.benchmark_calls = 0
 
     def is_connected(self):
         return self.connected
 
     def query(self, sql, params=None):
+        self.queries.append((sql, params))
         if self.query_raises:
             raise RuntimeError("query boom")
+        if "information_schema.TABLES" in sql:
+            if self.total_raises:
+                raise RuntimeError("total boom")
+            if self.total_rows is not None:
+                return [(self.total_rows,)]
+            return []
+        if "COUNT(*)" in sql:
+            if self.count_raises:
+                raise RuntimeError("count boom")
+            if self.matched_rows is not None:
+                return [(self.matched_rows,)]
+            return []
         if params:
             _, index_name = params
             if index_name in self.existing_indexes:
@@ -191,3 +211,64 @@ def test_measure_query_error_treated_as_not_existing():
     ddl = "CREATE INDEX idx_a ON t(a);"
     result = measure_index_impact(conn, "SELECT 1", [ddl])
     assert result.applied_ddls == [ddl]
+
+
+# ---- 收益守卫（recommended / verdict / selectivity） ----
+
+def test_measure_recommended_when_high_speedup():
+    """高提速 → recommended True，结论含“建议采纳”。"""
+    conn = FakeConnector(benchmark_times=[0.24, 0.005])
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    result = measure_index_impact(conn, "SELECT * FROM t WHERE a=1", [ddl])
+    assert result.recommended is True
+    assert "建议采纳" in result.verdict
+
+
+def test_measure_not_recommended_when_low_speedup():
+    """低提速 → recommended False，结论含“不建议”。"""
+    conn = FakeConnector(benchmark_times=[0.24, 0.24])
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    result = measure_index_impact(conn, "SELECT * FROM t WHERE a=1", [ddl])
+    assert result.recommended is False
+    assert "不建议" in result.verdict
+
+
+def test_measure_selectivity_computed():
+    """总行数与命中行数可查时，selectivity 正确计算。"""
+    conn = FakeConnector(benchmark_times=[0.24, 0.005],
+                         total_rows=100000, matched_rows=1010)
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    result = measure_index_impact(conn, "SELECT * FROM t WHERE a=1", [ddl])
+    assert result.total_rows == 100000
+    assert result.matched_rows == 1010
+    assert abs(result.selectivity - 0.0101) < 1e-9
+
+
+def test_measure_selectivity_probe_error_unknown():
+    """命中行数探测抛异常时 selectivity 为 -1.0，且不影响主结果。"""
+    conn = FakeConnector(benchmark_times=[0.24, 0.005],
+                         total_rows=100000, count_raises=True)
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    result = measure_index_impact(conn, "SELECT * FROM t WHERE a=1", [ddl])
+    assert result.selectivity == -1.0
+    assert result.recommended is True
+    assert result.applied_ddls == [ddl]
+
+
+def test_measure_non_select_skips_count_probe():
+    """非 SELECT 语句不执行 COUNT(*) 探测。"""
+    conn = FakeConnector(benchmark_times=[0.24, 0.24], total_rows=100000)
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    result = measure_index_impact(conn, "UPDATE t SET a=1", [ddl])
+    assert not any("COUNT(*)" in sql for sql, _ in conn.queries)
+    assert result.selectivity == -1.0
+
+
+def test_measure_inf_speedup_recommended():
+    """speedup 为 inf 时不抛异常且 recommended 为 True。"""
+    conn = FakeConnector(benchmark_times=[2.0, 0.0])
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    result = measure_index_impact(conn, "SELECT 1", [ddl])
+    assert result.speedup == float("inf")
+    assert result.recommended is True
+    assert "建议采纳" in result.verdict

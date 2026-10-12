@@ -126,6 +126,12 @@ def format_report(
             buf_console.print(f"  [bold green]实测提速: {index_impact.speedup:.1f}x[/bold green]")
         rolled = len(index_impact.applied_ddls) if index_impact.rolled_back else 0
         buf_console.print(f"  已回滚创建索引: {rolled} 个")
+        buf_console.print(f"  结论: {index_impact.verdict}")
+        if index_impact.selectivity >= 0:
+            buf_console.print(
+                f"  命中率: {index_impact.selectivity * 100:.2f}%"
+                f"（{index_impact.matched_rows}/{index_impact.total_rows} 行）"
+            )
         if index_impact.error:
             buf_console.print(f"  [red]错误: {index_impact.error}[/red]")
 

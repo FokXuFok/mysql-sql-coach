@@ -75,6 +75,11 @@ class IndexImpact:
     skipped_ddls: list[str]     # 因索引已存在（或无法解析）而跳过的 DDL
     rolled_back: bool           # 是否已成功回滚
     error: str = ""             # 出错信息（如回滚失败）
+    matched_rows: int = 0        # 命中的行数（估算/实测，0 表示未知）
+    total_rows: int = 0          # 表总行数（0 表示未知）
+    selectivity: float = -1.0    # 命中率 0~1；-1 表示未知
+    recommended: bool = False    # 是否建议采纳该索引
+    verdict: str = ""            # 中文结论
 
 
 @dataclass

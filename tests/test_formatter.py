@@ -171,3 +171,38 @@ def test_format_report_default_no_index_impact_section():
     sql_info, explain, analysis = _minimal_report_parts()
     output = format_report(sql_info, explain, analysis, None)
     assert "索引实测" not in output
+
+
+def test_format_report_index_impact_shows_verdict_and_selectivity():
+    """有 verdict/selectivity 时输出包含「结论」与「命中率」。"""
+    from sql_coach.models import IndexImpact
+
+    sql_info, explain, analysis = _minimal_report_parts()
+    impact = IndexImpact(
+        before_time=0.244, after_time=0.005, speedup=48.8,
+        applied_ddls=["CREATE INDEX idx ON t(c);"], skipped_ddls=[],
+        rolled_back=True, matched_rows=1010, total_rows=100000,
+        selectivity=0.0101, recommended=True,
+        verdict="索引有效（实测提速 48.8x），建议采纳",
+    )
+    output = format_report(sql_info, explain, analysis, None,
+                           index_impact=impact)
+    assert "结论" in output
+    assert "命中率" in output
+    assert "建议采纳" in output
+
+
+def test_format_report_index_impact_no_selectivity_hides_rate():
+    """selectivity == -1 时不出现「命中率」行。"""
+    from sql_coach.models import IndexImpact
+
+    sql_info, explain, analysis = _minimal_report_parts()
+    impact = IndexImpact(
+        before_time=0.244, after_time=0.245, speedup=1.0,
+        applied_ddls=[], skipped_ddls=[], rolled_back=True,
+        verdict="索引收益有限（实测提速 1.00x），不建议创建",
+    )
+    output = format_report(sql_info, explain, analysis, None,
+                           index_impact=impact)
+    assert "结论" in output
+    assert "命中率" not in output

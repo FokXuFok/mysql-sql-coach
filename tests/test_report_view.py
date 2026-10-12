@@ -146,3 +146,22 @@ def test_report_view_no_index_impact_section_by_default(app):
     view.set_report(make_report())
     texts = [w.text() for w in view.findChildren(QLabel)]
     assert not any("索引实测" in t for t in texts)
+
+
+def test_report_view_shows_index_impact_verdict(app):
+    """索引实测章节应展示 verdict 结论。"""
+    from PySide6.QtWidgets import QLabel
+    from sql_coach.models import IndexImpact
+
+    view = ReportView()
+    report = make_report()
+    report.index_impact = IndexImpact(
+        before_time=0.244, after_time=0.005, speedup=48.8,
+        applied_ddls=["CREATE INDEX idx ON t(col);"], skipped_ddls=[],
+        rolled_back=True, matched_rows=1010, total_rows=100000,
+        selectivity=0.0101, recommended=True,
+        verdict="索引有效（实测提速 48.8x），建议采纳",
+    )
+    view.set_report(report)
+    texts = [w.text() for w in view.findChildren(QLabel)]
+    assert any("建议采纳" in t for t in texts)
