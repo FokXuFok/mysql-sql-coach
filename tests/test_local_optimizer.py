@@ -64,6 +64,25 @@ def test_optimizer_composes_rewrites():
     assert "created_at >= '2026-01-01 00:00:00'" in result.optimized_sql
 
 
+def test_explain_no_verification_note_for_non_index_rule():
+    """未连接数据库时，仅命中非索引规则不应追加"未校验"提示。"""
+    from sql_coach.local.rules.or_condition import OrConditionRule
+    info = make_info("SELECT * FROM orders WHERE a=1 OR b=2", tables=["orders"],
+                     columns=["*"], where=["a=1", "b=2"])
+    result = LocalOptimizer(rules=[OrConditionRule()]).optimize(info, Schema())
+    assert "or_condition" in result.explanation
+    assert "未校验" not in result.explanation
+
+
+def test_explain_includes_verification_note_for_missing_index():
+    from sql_coach.local.rules.missing_index import MissingIndexRule
+    info = make_info("SELECT * FROM orders WHERE status='pending'", tables=["orders"],
+                     columns=["*"], where=["status='pending'"])
+    result = LocalOptimizer(rules=[MissingIndexRule()]).optimize(info, Schema())
+    assert "missing_index" in result.explanation
+    assert "未校验" in result.explanation
+
+
 def test_optimizer_isolates_rewrite_and_ddls_exceptions():
     class BoomRewrite(Rule):
         name = "boom_rewrite"

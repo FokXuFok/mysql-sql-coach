@@ -77,6 +77,14 @@ def test_no_limit_requires_no_where():
     assert NoLimitRule().check(ctx_ok) == []
 
 
+def test_no_limit_column_named_limit_not_false_positive():
+    """列名含 limit 不应被误判为已带 LIMIT。"""
+    ctx = _ctx("SELECT limit_amount FROM t", tables=["t"], columns=["limit_amount"])
+    assert len(NoLimitRule().check(ctx)) == 1
+    ctx_ok = _ctx("SELECT * FROM t LIMIT 10", tables=["t"], columns=["*"])
+    assert NoLimitRule().check(ctx_ok) == []
+
+
 def test_deep_pagination_threshold():
     ctx = _ctx("SELECT * FROM orders LIMIT 100000, 20", tables=["orders"], columns=["*"])
     assert len(DeepPaginationRule().check(ctx)) == 1

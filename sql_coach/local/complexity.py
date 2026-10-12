@@ -45,12 +45,23 @@ class ComplexityScorer:
         elif re.search(r"\b(COUNT|SUM|AVG|MAX|MIN)\s*\(", upper):
             s += 2
             reasons.append("聚合函数")
+        group_cols = re.search(
+            r"\bGROUP\s+BY\s+(.+?)(?:\bHAVING\b|\bORDER\b|\bLIMIT\b|$)",
+            upper, re.DOTALL)
+        if group_cols and len([c for c in group_cols.group(1).split(",") if c.strip()]) >= 2:
+            s += 1
+            reasons.append("多列分组")
         if re.search(r"\bOVER\s*\(", upper):
             s += 5
             reasons.append("窗口函数")
         if re.search(r"\bCASE\b", upper):
             s += 2
             reasons.append("CASE 表达式")
+        # 嵌套函数表达式：外层函数名紧跟 "("，内部又出现函数调用。
+        # 外层不允许空格，避免把 "WHERE (SELECT ...)" 这类子查询误判为嵌套函数。
+        if re.search(r"[A-Za-z_]\w*\([^()]*[A-Za-z_]\w*\s*\(", upper):
+            s += 2
+            reasons.append("嵌套函数表达式")
         if len(re.findall(r"\bOR\b", upper)) >= 2:
             s += 1
             reasons.append("多 OR 条件")

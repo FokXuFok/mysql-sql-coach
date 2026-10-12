@@ -48,6 +48,32 @@ def test_reasons_recorded():
     assert any("2 张表" in r for r in c.reasons)
 
 
+def test_multi_column_group_by_adds_score():
+    single = make_info("SELECT a, b FROM t WHERE x=1 GROUP BY a",
+                       tables=["t"], columns=["a", "b"], where=["x=1"])
+    multi = make_info("SELECT a, b FROM t WHERE x=1 GROUP BY a, b",
+                      tables=["t"], columns=["a", "b"], where=["x=1"])
+    c1 = ComplexityScorer().score(single)
+    c2 = ComplexityScorer().score(multi)
+    assert "多列分组" not in c1.reasons
+    assert "多列分组" in c2.reasons
+    assert c2.score == c1.score + 1
+
+
+def test_nested_function_expression_detected():
+    info = make_info("SELECT UPPER(SUBSTR(name, 1, 3)) FROM t",
+                     tables=["t"], columns=["name"], where=["x=1"])
+    c = ComplexityScorer().score(info)
+    assert "嵌套函数表达式" in c.reasons
+
+
+def test_window_function_not_treated_as_nested_function():
+    info = make_info("SELECT ROW_NUMBER() OVER (ORDER BY id) FROM t",
+                     tables=["t"], columns=["id"], where=["x=1"])
+    c = ComplexityScorer().score(info)
+    assert "嵌套函数表达式" not in c.reasons
+
+
 def test_correlated_subquery_not_specially_penalized():
     info = make_info(
         "SELECT u.id FROM users u WHERE (SELECT COUNT(*) FROM orders o "

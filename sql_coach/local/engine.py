@@ -71,5 +71,7 @@ class LocalOptimizer:
             return "本地规则引擎：未发现明显问题。"
         table = sql_info.tables[0] if sql_info.tables else ""
         verified = bool(table) and schema.has_table(table)
-        note = "" if verified else "（未连接数据库，索引相关结论未校验）"
+        has_index_rule = any("missing_index" in h for h in hit)
+        note = ("（未连接数据库，索引相关结论未校验）"
+                if has_index_rule and not verified else "")
         return "本地规则引擎命中规则: " + ", ".join(hit) + note
