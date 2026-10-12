@@ -192,3 +192,33 @@ def test_coach_routes_complex_sql_to_ai():
         report = coach.analyze(sql)
         assert report.engine_used == "deepseek"
         assert mock_ai.analyze.called
+
+
+def test_coach_falls_back_to_ai_when_local_engine_fails():
+    """本地规则引擎整体失败时应降级到 AI（spec §12），而不是把异常抛给上层。"""
+    from sql_coach.models import Config, DBConfig
+    from sql_coach.coach import SQLCoach
+    from sql_coach.models import AnalysisResult
+    from unittest.mock import patch, MagicMock
+
+    db = DBConfig(host="h", port=3306, user="u", password="p", database="d")
+    config = Config(db=db, model="deepseek", deepseek_api_key="k", openai_api_key="",
+                    ollama_url="http://x", benchmark_runs=3, mock=False, optimizer_mode="auto")
+    with patch("sql_coach.coach.DBConnector") as db_cls, \
+         patch("sql_coach.coach.create_ai_engine") as ai_factory, \
+         patch("sql_coach.optimizer.LocalOptimizerAdapter") as local_cls:
+        db_cls.return_value.is_connected.return_value = False
+        local_cls.return_value.name.return_value = "local"
+        local_cls.return_value.optimize.side_effect = RuntimeError("local boom")
+
+        mock_ai = MagicMock()
+        mock_ai.name.return_value = "deepseek"
+        mock_ai.analyze.return_value = AnalysisResult(
+            problems=[], optimized_sql="SELECT 1", index_ddls=[], explanation="ok")
+        ai_factory.return_value = mock_ai
+
+        coach = SQLCoach(config, use_cache=False)
+        report = coach.analyze("SELECT * FROM orders WHERE status='pending'")
+
+        assert report.engine_used == "deepseek"
+        assert mock_ai.analyze.called

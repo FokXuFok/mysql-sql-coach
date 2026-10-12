@@ -10,7 +10,7 @@ from .models import (
 )
 from .local.complexity import ComplexityScorer
 from .local.schema import Schema, SchemaProvider
-from .optimizer import select_optimizer
+from .optimizer import select_optimizer, AIOptimizerAdapter
 from .engine.sql_parser import parse as parse_sql
 from .ai.factory import create_ai_engine
 from .db.connector import DBConnector
@@ -116,7 +116,17 @@ class SQLCoach:
         if analysis is not None:
             logger.debug('timing optimize: %.2f ms (cached)', (time.perf_counter() - t) * 1000)
         else:
-            analysis = optimizer.optimize(sql_info, explain, schema, on_chunk=on_chunk)
+            try:
+                analysis = optimizer.optimize(sql_info, explain, schema, on_chunk=on_chunk)
+            except Exception as e:
+                if engine_name != "local":
+                    raise
+                # 本地规则引擎整体失败 -> 降级到 AI（spec §12），不把异常抛给上层
+                logger.warning("本地规则引擎失败，降级到 AI: %s", e)
+                ai_engine = self.ai
+                optimizer = AIOptimizerAdapter(ai_engine)
+                engine_name = ai_engine.name()
+                analysis = optimizer.optimize(sql_info, explain, schema, on_chunk=on_chunk)
             logger.debug('timing optimize: %.2f ms', (time.perf_counter() - t) * 1000)
             if engine_name != "local" and self.cache:
                 self.cache.put(sql, analysis)
