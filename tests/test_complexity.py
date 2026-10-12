@@ -74,6 +74,46 @@ def test_window_function_not_treated_as_nested_function():
     assert "嵌套函数表达式" not in c.reasons
 
 
+def test_nested_function_without_space_detected():
+    """M3: 无空格的嵌套函数 UPPER(SUBSTR(...)) 仍应命中。"""
+    info = make_info("SELECT UPPER(SUBSTR(x,1,2)) FROM t",
+                     tables=["t"], columns=["x"], where=["y=1"])
+    c = ComplexityScorer().score(info)
+    assert "嵌套函数表达式" in c.reasons
+
+
+def test_in_subquery_not_treated_as_nested_function():
+    """M3: IN(SELECT COUNT(...)) 的外层是关键字 IN，不应命中。"""
+    info = make_info("SELECT * FROM t WHERE id IN(SELECT COUNT(*) FROM o)",
+                     tables=["t"], columns=["*"], where=["id IN(SELECT COUNT(*) FROM o)"])
+    c = ComplexityScorer().score(info)
+    assert "嵌套函数表达式" not in c.reasons
+
+
+def test_exists_subquery_not_treated_as_nested_function():
+    """M3: EXISTS(SELECT MAX(...)) 的外层是关键字 EXISTS，不应命中。"""
+    info = make_info("SELECT * FROM t WHERE EXISTS(SELECT MAX(x) FROM o)",
+                     tables=["t"], columns=["*"], where=["EXISTS(SELECT MAX(x) FROM o)"])
+    c = ComplexityScorer().score(info)
+    assert "嵌套函数表达式" not in c.reasons
+
+
+def test_group_by_function_with_commas_not_multi_column():
+    """M2: GROUP BY IF(a,b,c) 括号内逗号不算多列分组。"""
+    info = make_info("SELECT IF(a, b, c) FROM t WHERE x=1 GROUP BY IF(a, b, c)",
+                     tables=["t"], columns=["a", "b", "c"], where=["x=1"])
+    c = ComplexityScorer().score(info)
+    assert "多列分组" not in c.reasons
+
+
+def test_group_by_multiple_columns_still_multi_column():
+    """M2: GROUP BY a, b 仍算多列分组。"""
+    info = make_info("SELECT a, b FROM t WHERE x=1 GROUP BY a, b",
+                     tables=["t"], columns=["a", "b"], where=["x=1"])
+    c = ComplexityScorer().score(info)
+    assert "多列分组" in c.reasons
+
+
 def test_correlated_subquery_not_specially_penalized():
     info = make_info(
         "SELECT u.id FROM users u WHERE (SELECT COUNT(*) FROM orders o "
