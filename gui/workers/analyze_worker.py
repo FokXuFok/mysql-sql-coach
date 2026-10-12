@@ -31,12 +31,15 @@ class AnalyzeWorker(QThread):
     """后台分析线程。
 
     Signals:
-        finished(Report): 分析完成, 携带 Report
+        analysis_done(Report): 分析完成, 携带 Report
         error(str): 异常, 携带错误信息
         stage_changed(str): 阶段变化, "parse"/"explain"/"ai"/"benchmark"
+
+    注意: 自定义完成信号**不能**叫 ``finished`` —— 那会覆盖 ``QThread`` 内置的
+    ``finished`` 信号, 导致线程结束时的兜底逻辑收不到通知。
     """
 
-    finished = Signal(Report)
+    analysis_done = Signal(Report)
     error = Signal(str)
     stage_changed = Signal(str)
 
@@ -65,6 +68,6 @@ class AnalyzeWorker(QThread):
 
             report = coach.analyze(self.sql, on_stage=on_stage)
             coach.close()
-            self.finished.emit(report)
+            self.analysis_done.emit(report)
         except Exception as e:
             self.error.emit(str(e))

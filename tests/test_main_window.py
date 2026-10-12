@@ -114,3 +114,43 @@ def test_db_failure_uses_non_modal_dialog(app, monkeypatch):
     win = MainWindow(config=make_real_config())
     assert shown.get("called") is True
     assert "模拟模式" in win.status_bar.currentMessage()
+
+
+def test_analyze_error_does_not_block_ui(app, monkeypatch):
+    """回归: 分析失败时不得用模态框卡死主窗口, 且 UI 必须恢复可交互。
+
+    历史 bug: `_on_analyze_error` 调用模态 `QMessageBox.critical`，会进入嵌套
+    事件循环 —— 用户没注意到弹窗时，输入框点不动、所有按钮无响应。
+    注意：仅改成 `show()` 还不够，`QMessageBox` **默认是应用级模态**，
+    必须显式 `setWindowModality(Qt.NonModal)`，否则仍会拦住主窗口输入。
+    """
+    import time
+    from unittest.mock import patch
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QMessageBox
+    from sql_coach import coach as coach_mod
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("分析失败时走了模态弹窗路径（会卡死主窗口）")
+
+    monkeypatch.setattr(QMessageBox, "critical", _boom)
+    monkeypatch.setattr(QMessageBox, "exec", _boom)
+
+    win = MainWindow(config=make_config())
+    with patch.object(coach_mod.SQLCoach, "analyze", side_effect=RuntimeError("模拟失败")):
+        win._start_analyze("SELECT 1")
+        for _ in range(100):
+            QApplication.processEvents()
+            if win.worker is None:
+                break
+            time.sleep(0.05)
+
+    assert win.worker is None
+    assert win.sql_input.editor.isReadOnly() is False
+    assert win._analyze_action.isEnabled() is True
+
+    box = win._message_box
+    assert box is not None, "失败时应给出提示"
+    assert box.windowModality() == Qt.NonModal, "提示框必须是非模态，否则会卡住主窗口"
+    assert QApplication.activeModalWidget() is None
+    box.close()

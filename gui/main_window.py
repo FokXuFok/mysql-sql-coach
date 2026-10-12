@@ -156,16 +156,25 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("DB: 模拟模式")
 
     def _show_db_fallback(self, message: str) -> None:
-        """非模态提示连库失败。
+        """非模态提示连库失败。"""
+        self._show_message("数据库连接失败", message, QMessageBox.Warning)
 
-        用非模态 ``show()`` 而非模态 ``QMessageBox.warning``：后者会进入
-        嵌套事件循环，在无数据库的环境（如 CI）会阻塞启动。
+    def _show_message(self, title: str, text: str, icon) -> None:
+        """非模态提示框。
+
+        必须同时做两件事，缺一不可：
+        1. 用 ``show()`` 而不是模态静态方法（``warning``/``critical``）——后者进入嵌套事件循环；
+        2. 显式 ``setWindowModality(Qt.NonModal)`` —— ``QMessageBox`` **默认是应用级模态**，
+           只调 ``show()`` 虽然不阻塞代码，但仍会拦住主窗口的输入，用户没注意到弹窗时
+           就会觉得"点哪都没反应"。
         """
         box = QMessageBox(self)
-        box.setWindowTitle("数据库连接失败")
-        box.setText(message)
-        box.setIcon(QMessageBox.Warning)
-        self._db_fallback_box = box  # 保持引用, 防止被 GC
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setIcon(icon)
+        box.setWindowModality(Qt.NonModal)
+        box.setModal(False)
+        self._message_box = box  # 保持引用, 防止被 GC
         box.show()
 
     def _on_analyze(self) -> None:
@@ -187,11 +196,19 @@ class MainWindow(QMainWindow):
             sql=sql, config=self.config, use_cache=not self.config.mock,
         )
         self.worker.stage_changed.connect(self._on_stage_changed)
-        self.worker.finished.connect(self._on_analyze_finished)
+        self.worker.analysis_done.connect(self._on_analyze_finished)
         self.worker.error.connect(self._on_analyze_error)
-        self.worker.finished.connect(self.worker.deleteLater)
+        # QThread 内置 finished 总会发射 -> 作为兜底, 保证 UI 一定回到可交互状态
+        self.worker.finished.connect(self._reset_analysis_ui)
+        self.worker.analysis_done.connect(self.worker.deleteLater)
         self.worker.error.connect(self.worker.deleteLater)
         self.worker.start()
+
+    def _reset_analysis_ui(self) -> None:
+        """恢复 UI 到可交互状态。幂等, 可被多个信号调用。"""
+        self.sql_input.set_readonly(False)
+        self._analyze_action.setEnabled(True)
+        self.worker = None
 
     def _on_stage_changed(self, stage: str) -> None:
         """更新状态栏文字。"""
@@ -213,20 +230,20 @@ class MainWindow(QMainWindow):
         except Exception:
             pass  # 历史记录失败不影响主流程
 
-        self.sql_input.set_readonly(False)
-        self._analyze_action.setEnabled(True)
-        self.worker = None
+        self._reset_analysis_ui()
         engine = "本地规则" if report.engine_used == "local" else report.engine_used
         self.status_bar.showMessage(
             f"完成 | {engine} | 耗时 {elapsed/1000:.1f}s"
         )
 
     def _on_analyze_error(self, msg: str) -> None:
-        """分析出错: 弹错误框 + 恢复 UI。"""
-        self.sql_input.set_readonly(False)
-        self._analyze_action.setEnabled(True)
-        self.worker = None
-        QMessageBox.critical(self, "分析失败", msg)
+        """分析出错: 提示 + 恢复 UI。
+
+        用**非模态**提示而非 ``QMessageBox.critical``: 后者会进入嵌套事件循环,
+        在用户没注意到弹窗时会让整个主窗口"点哪都没反应"(输入框也无法输入)。
+        """
+        self._reset_analysis_ui()
+        self._show_message("分析失败", msg, QMessageBox.Critical)
         self.status_bar.showMessage("分析失败")
 
     # ---- 其他功能 ----
@@ -240,7 +257,7 @@ class MainWindow(QMainWindow):
     def _on_export(self) -> None:
         """导出报告: 弹文件对话框。"""
         if self.last_report is None:
-            QMessageBox.information(self, "提示", "请先执行一次分析")
+            self._show_message("提示", "请先执行一次分析", QMessageBox.Information)
             return
         path, selected_filter = QFileDialog.getSaveFileName(
             self, "导出报告", "report",
@@ -257,7 +274,7 @@ class MainWindow(QMainWindow):
             self.exporter.save(self.last_report, path, fmt)
             self.status_bar.showMessage(f"已导出到: {path}")
         except Exception as e:
-            QMessageBox.critical(self, "导出失败", str(e))
+            self._show_message("导出失败", str(e), QMessageBox.Critical)
 
     def _on_history(self) -> None:
         """打开历史记录对话框。"""

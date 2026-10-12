@@ -55,8 +55,8 @@ def qapp(qapp):
     return qapp
 
 
-def test_finished_signal_emits_report(qtbot):
-    """正常完成: 发射 finished 信号, 携带 Report。"""
+def test_analysis_done_signal_emits_report(qtbot):
+    """正常完成: 发射 analysis_done 信号, 携带 Report。"""
     config = make_config(mock=True)
     fake_report = make_report()
     fake_coach = MagicMock()
@@ -67,9 +67,9 @@ def test_finished_signal_emits_report(qtbot):
         worker = AnalyzeWorker(sql="SELECT 1", config=config, use_cache=False)
 
         captured = []
-        worker.finished.connect(lambda r: captured.append(r))
+        worker.analysis_done.connect(lambda r: captured.append(r))
 
-        with qtbot.waitSignal(worker.finished, timeout=5000):
+        with qtbot.waitSignal(worker.analysis_done, timeout=5000):
             worker.start()
 
         assert len(captured) == 1
@@ -121,7 +121,7 @@ def test_stage_changed_signal_emitted(qtbot):
         stages = []
         worker.stage_changed.connect(lambda s: stages.append(s))
 
-        with qtbot.waitSignal(worker.finished, timeout=5000):
+        with qtbot.waitSignal(worker.analysis_done, timeout=5000):
             worker.start()
 
         # 至少触发 parse 和 ai 两个阶段
