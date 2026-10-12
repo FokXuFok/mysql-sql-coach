@@ -241,3 +241,84 @@ def test_local_optimizer_aggregates_new_rules():
     assert any("UNION" in d for d in descs)
     assert any("DISTINCT" in d for d in descs)
     assert any("RAND" in d.upper() for d in descs)
+
+
+def test_negation_ignores_string_literals_and_comments():
+    """否定运算符出现在字符串字面量/注释里时不应误报。"""
+    for sql in (
+        "SELECT * FROM t WHERE note = 'a!=b'",
+        "SELECT * FROM t WHERE note = 'x NOT IN y'",
+        "SELECT * FROM t WHERE a = 1 -- a != 1",
+        "SELECT * FROM t WHERE a = 1 /* a <> 1 */",
+    ):
+        ctx = _ctx(sql, tables=["t"], columns=["*"], where=["a"])
+        assert NegationRule().check(ctx) == [], sql
+
+
+def test_negation_ignores_null_safe_equal_and_is_not_null():
+    """<=> 是 NULL 安全等于（非 <>）；IS NOT NULL 可用索引，均不应命中。"""
+    for sql in (
+        "SELECT * FROM t WHERE a <=> b",
+        "SELECT * FROM t WHERE col IS NOT NULL",
+    ):
+        ctx = _ctx(sql, tables=["t"], columns=["*"], where=["a"])
+        assert NegationRule().check(ctx) == [], sql
+
+
+def test_negation_still_detects_negative_conditions():
+    """正例：真正的否定条件仍需命中（含 SELECT/HAVING 范围）。"""
+    for sql in (
+        "SELECT * FROM t WHERE a != 1",
+        "SELECT * FROM t WHERE a <> 1",
+        "SELECT * FROM t WHERE a NOT IN (1, 2)",
+        "SELECT * FROM t WHERE a NOT LIKE 'x%'",
+        "SELECT * FROM t WHERE NOT EXISTS (SELECT 1 FROM u WHERE u.id = t.id)",
+    ):
+        ctx = _ctx(sql, tables=["t"], columns=["*"], where=["a"])
+        assert len(NegationRule().check(ctx)) == 1, sql
+
+
+def test_order_by_rand_ignores_literal_and_comment():
+    for sql in (
+        "SELECT * FROM t WHERE note = 'ORDER BY RAND()'",
+        "SELECT * FROM t ORDER BY id -- ORDER BY RAND()",
+    ):
+        ctx = _ctx(sql, tables=["t"], columns=["*"], order_by=["id"])
+        assert OrderByRandRule().check(ctx) == [], sql
+    ctx = _ctx("SELECT * FROM t ORDER BY RAND()", tables=["t"], columns=["*"],
+               order_by=["RAND()"])
+    assert len(OrderByRandRule().check(ctx)) == 1
+
+
+def test_union_dedup_ignores_literal_and_comment():
+    for sql in (
+        "SELECT a FROM t WHERE note = 'x UNION y'",
+        "SELECT a FROM t -- x UNION y",
+    ):
+        ctx = _ctx(sql, tables=["t"], columns=["a"])
+        assert UnionDedupRule().check(ctx) == [], sql
+
+
+def test_union_dedup_plain_vs_all_and_mixed():
+    plain = _ctx("SELECT a FROM t UNION SELECT a FROM t2", tables=["t"], columns=["a"])
+    assert len(UnionDedupRule().check(plain)) == 1
+    all_only = _ctx("SELECT a FROM t UNION ALL SELECT a FROM t2", tables=["t"], columns=["a"])
+    assert UnionDedupRule().check(all_only) == []
+    mixed = _ctx("SELECT a FROM t UNION ALL SELECT a FROM t2 UNION SELECT a FROM t3",
+                 tables=["t"], columns=["a"])
+    assert len(UnionDedupRule().check(mixed)) == 1
+
+
+def test_redundant_distinct_no_false_positive_across_subquery_layers():
+    """DISTINCT 与 GROUP BY 分处内外层时不应误报。"""
+    for sql in (
+        "SELECT a FROM (SELECT DISTINCT b FROM t) x GROUP BY a",
+        "SELECT DISTINCT a FROM (SELECT b FROM t GROUP BY b) x",
+    ):
+        ctx = _ctx(sql, tables=["t"], columns=["a"])
+        assert RedundantDistinctRule().check(ctx) == [], sql
+
+
+def test_redundant_distinct_same_layer_still_detected():
+    ctx = _ctx("SELECT DISTINCT a FROM t GROUP BY a", tables=["t"], columns=["a"])
+    assert len(RedundantDistinctRule().check(ctx)) == 1

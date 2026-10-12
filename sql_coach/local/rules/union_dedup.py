@@ -3,6 +3,7 @@ import re
 
 from ...models import Problem
 from .base import Rule, RuleContext
+from ._text import clean
 
 # 匹配 UNION 但排除 UNION ALL（负向先行断言允许 ALL 前有空格）
 _PAT = re.compile(r"\bUNION\b(?!\s+ALL\b)", re.IGNORECASE)
@@ -13,7 +14,8 @@ class UnionDedupRule(Rule):
     risk = "safe"  # 去重语义可能影响结果，本期仅建议
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        if not _PAT.search(ctx.sql_info.raw_sql or ""):
+        sql = clean(ctx.sql_info.raw_sql or "")
+        if not _PAT.search(sql):
             return []
         table = ctx.sql_info.tables[0] if ctx.sql_info.tables else ""
         return [Problem(severity="warning", table=table,
