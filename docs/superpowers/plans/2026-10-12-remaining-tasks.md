@@ -291,3 +291,61 @@ README 宣称的"50-100x"只在**高选择性**谓词上成立。
    未加 `ORDER BY ORDINAL_POSITION`，导致改写后列序可能变化（语义等价，但不美观）。
 4. 既有 `or_condition` / `no_limit` / `leading_wildcard` 等规则仍有"字面量/注释盲区"，
    可考虑统一接入 `_text.clean`（注意 `leading_wildcard` 需保留字面量匹配）。
+
+---
+
+## 六、按用户指定顺序执行的第二轮（3 → 1 → 端到端 → 2 → 4）
+
+全量测试 **327 passed**。
+
+### 6.1（步骤 3）schema 列序修复
+`information_schema.COLUMNS` 查询加 `ORDER BY TABLE_NAME, ORDINAL_POSITION`，
+修正 `SELECT *` 展开后列序乱序的问题（原来会变成字母序）。提交 `a6f556f`。
+
+### 6.2（步骤 1）索引实测模式
+新增 `sql_coach/index_experiment.py`：
+- `measure_index_impact(conn, sql, ddls, runs)`：临时 `CREATE INDEX` → `ANALYZE TABLE` → 复测 → **`finally` 回滚 `DROP INDEX`**。
+- 索引已存在 → 跳过（既不建也不删）；回滚失败 → `rolled_back=False` + `error` + `logger.error`；异常不外抛。
+- 默认**关闭**：`Config.measure_index` 默认 `False`、`.env` 的 `MEASURE_INDEX=false`；CLI `--measure-index` 显式开启。
+- `Report.index_impact` 承载结果；formatter / GUI 展示。提交 `bc31a2c`。
+
+### 6.3（端到端实测）真实 MySQL 上的实测与选择性扫描
+`test` 库 orders 10 万行。**选择性扫描结果（关键数据）：**
+
+| 命中率 | 0.05% | 1.01% | 4.99% | 10% | 20% | 30% | 50% | 100% |
+|--------|-------|-------|-------|-----|-----|-----|-----|------|
+| 提速 | **52.7x** | **5.25x** | 1.15x | 1.03x | 1.01x | 1.01x | 0.99x | 1.00x |
+
+→ **索引在选择性约 1%~5% 之间失效**。实测后索引全部删除，回滚干净（orders 只剩 PRIMARY、user_id）。
+
+### 6.4（步骤 2）数据驱动的收益守卫
+`IndexImpact` 新增 `matched_rows / total_rows / selectivity / recommended / verdict`；
+阈值常量 `INDEX_SPEEDUP_THRESHOLD = 1.3`（落在 1.15x 与 5.25x 之间）。
+实测效果：
+- `amount>999.5`（0.05%）→ 45.9x → `索引有效（实测提速 45.9x），建议采纳`
+- `status='pending'`（33.2%）→ 0.98x → `索引收益有限（实测提速 0.98x，低于阈值 1.30x，命中率约 33.2%），不建议创建`
+- `city LIKE '%京'`（19.8%）→ 1.11x → 不建议创建
+
+提交 `018af7a`（守卫）+ `4d84b38`（审查修复）。
+
+### 6.5（步骤 4）解析层清洗重构
+把"去注释 / 清空字面量"从"每条规则各自调用"上移到解析产物：
+- 新增中性模块 `sql_coach/sql_text.py`（原 `local/rules/_text.py` 迁移后删除）。
+- `SQLInfo` 新增 **两个惰性 property**（不是字段，避免破坏既有直接构造）：
+  - `clean_sql`（去注释 + 清空字面量）→ 关键字类规则用
+  - `nocomment_sql`（只去注释、保留字面量）→ 需要匹配字面量的规则用
+    （`leading_wildcard`、`function_on_column`、`select_star.rewrite`）
+- 关键字类 8 条规则与 `complexity.py` 统一切到 `clean_sql`，
+  **顺带修好了 `or_condition` / `no_limit` / `deep_pagination` / `subquery_to_join` 的同类盲区**。
+提交 `426ce20`。
+
+### 6.6 审查发现并修复的缺陷
+1. **选择性探测对含 `%` 的 SQL 失效**：`conn.query(sql, ())` 让 pymysql 执行 `query % ()`，
+   `LIKE '%abc'` 这类会抛 `TypeError` → 选择性恒为 -1。改为不传第二参数。
+2. **清洗剥离 `/*! ... */`（可执行注释）与 `/*+ ... */`（优化器提示）**：改写产物会丢失它们、
+   改变执行计划（重构前 `select_star` 用 `raw_sql` 是会保留的）。改为 `strip_comments` 保留这两类块。
+3. 阈值附近文案精度不一致（补出"低于阈值 1.30x"）。
+4. 索引全部已存在时结论应为"索引已存在，无需创建"。
+
+安全性复核结论：**回滚保证成立**（含"建第 1 个成功、建第 2 个失败"路径）、
+索引已存在时既不建也不删、默认关闭、mock/未连接时完全跳过、不会误删用户索引。
