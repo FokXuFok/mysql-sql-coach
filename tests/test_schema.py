@@ -100,3 +100,12 @@ def test_provider_swallows_query_error():
             raise RuntimeError("db down")
     sp = SchemaProvider(Boom())
     assert sp.load(["orders"]) == Schema()
+
+
+def test_columns_query_orders_by_ordinal_position():
+    """列序必须按表定义顺序（ORDINAL_POSITION），否则 SELECT * 展开后列序会乱。"""
+    fake = FakeConnector()
+    SchemaProvider(fake).load(["orders"])
+    cols_sql = [c for c in fake.calls if "information_schema.COLUMNS" in c]
+    assert cols_sql, "应查询 information_schema.COLUMNS"
+    assert "ORDINAL_POSITION" in cols_sql[0]

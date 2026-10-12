@@ -89,7 +89,8 @@ class SchemaProvider:
 
         for tname, cname, dtype in self.connector.query(
             "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS "
-            f"WHERE TABLE_SCHEMA = DATABASE() AND LOWER(TABLE_NAME) IN ({placeholders})",
+            f"WHERE TABLE_SCHEMA = DATABASE() AND LOWER(TABLE_NAME) IN ({placeholders}) "
+            "ORDER BY TABLE_NAME, ORDINAL_POSITION",
             tuple(lowered),
         ):
             ts = schema.tables.setdefault(tname.lower(), TableSchema(name=tname))
