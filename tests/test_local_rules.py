@@ -150,3 +150,94 @@ def test_function_on_column_no_rewrite_for_other_functions():
     sql = "SELECT id FROM orders WHERE UPPER(name)='ABC'"
     ctx = _ctx(sql, tables=["orders"], columns=["id"], where=["UPPER(name)='ABC'"])
     assert FunctionOnColumnRule().rewrite(ctx) is None
+
+
+from sql_coach.local.rules.negation import NegationRule
+from sql_coach.local.rules.order_by_rand import OrderByRandRule
+from sql_coach.local.rules.union_dedup import UnionDedupRule
+from sql_coach.local.rules.redundant_distinct import RedundantDistinctRule
+from sql_coach.local.engine import LocalOptimizer
+
+
+def test_negation_detects_negative_conditions():
+    for sql in (
+        "SELECT * FROM t WHERE a != 1",
+        "SELECT * FROM t WHERE a <> 1",
+        "SELECT * FROM t WHERE a NOT IN (1, 2)",
+        "SELECT * FROM t WHERE name NOT LIKE 'a%'",
+        "SELECT * FROM t WHERE NOT EXISTS (SELECT 1 FROM u WHERE u.id = t.id)",
+    ):
+        ctx = _ctx(sql, tables=["t"], columns=["*"], where=["a"])
+        problems = NegationRule().check(ctx)
+        assert len(problems) == 1, sql
+        assert problems[0].severity == "warning"
+        assert "否定" in problems[0].description
+
+
+def test_negation_ignores_is_not_null():
+    """IS NOT NULL 属于 NOT NULL 判定且常可用索引，不应视为否定条件。"""
+    ctx = _ctx("SELECT * FROM t WHERE col IS NOT NULL",
+               tables=["t"], columns=["*"], where=["col IS NOT NULL"])
+    assert NegationRule().check(ctx) == []
+
+
+def test_negation_no_false_positive_on_positive_condition():
+    ctx = _ctx("SELECT * FROM t WHERE a = 1", tables=["t"], columns=["*"], where=["a=1"])
+    assert NegationRule().check(ctx) == []
+
+
+def test_order_by_rand_detects_variants():
+    for sql in ("SELECT * FROM t ORDER BY RAND()",
+                "SELECT * FROM t order by rand ( )"):
+        ctx = _ctx(sql, tables=["t"], columns=["*"], order_by=["RAND()"])
+        problems = OrderByRandRule().check(ctx)
+        assert len(problems) == 1, sql
+        assert problems[0].severity == "warning"
+        assert "RAND" in problems[0].description.upper()
+
+
+def test_order_by_rand_no_false_positive():
+    ctx = _ctx("SELECT * FROM t ORDER BY id", tables=["t"], columns=["*"], order_by=["id"])
+    assert OrderByRandRule().check(ctx) == []
+    # RAND() 出现在 SELECT 列表但不用于排序，不应命中
+    ctx2 = _ctx("SELECT RAND() FROM t", tables=["t"], columns=["RAND()"])
+    assert OrderByRandRule().check(ctx2) == []
+
+
+def test_union_dedup_detects_plain_union():
+    ctx = _ctx("SELECT a FROM t UNION SELECT a FROM t2", tables=["t"], columns=["a"])
+    problems = UnionDedupRule().check(ctx)
+    assert len(problems) == 1
+    assert problems[0].severity == "warning"
+    assert "UNION" in problems[0].description
+
+
+def test_union_dedup_ignores_union_all():
+    ctx = _ctx("SELECT a FROM t UNION ALL SELECT a FROM t2", tables=["t"], columns=["a"])
+    assert UnionDedupRule().check(ctx) == []
+
+
+def test_redundant_distinct_detects_distinct_with_group_by():
+    ctx = _ctx("SELECT DISTINCT a FROM t GROUP BY a", tables=["t"], columns=["a"])
+    problems = RedundantDistinctRule().check(ctx)
+    assert len(problems) == 1
+    assert problems[0].severity == "info"
+    assert "DISTINCT" in problems[0].description
+
+
+def test_redundant_distinct_needs_both_clauses():
+    only_distinct = _ctx("SELECT DISTINCT a FROM t", tables=["t"], columns=["a"])
+    assert RedundantDistinctRule().check(only_distinct) == []
+    only_group = _ctx("SELECT a FROM t GROUP BY a", tables=["t"], columns=["a"])
+    assert RedundantDistinctRule().check(only_group) == []
+
+
+def test_local_optimizer_aggregates_new_rules():
+    """默认规则集应同时命中 union_dedup / redundant_distinct / order_by_rand。"""
+    sql = "SELECT DISTINCT a FROM t GROUP BY a UNION SELECT a FROM t2 ORDER BY RAND()"
+    info = make_info(sql, tables=["t"], columns=["a"])
+    result = LocalOptimizer().optimize(info, Schema())
+    descs = [p.description for p in result.problems]
+    assert any("UNION" in d for d in descs)
+    assert any("DISTINCT" in d for d in descs)
+    assert any("RAND" in d.upper() for d in descs)

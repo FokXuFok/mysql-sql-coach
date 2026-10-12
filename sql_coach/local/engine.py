@@ -14,6 +14,10 @@ from .rules.no_limit import NoLimitRule
 from .rules.deep_pagination import DeepPaginationRule
 from .rules.or_condition import OrConditionRule
 from .rules.subquery_to_join import SubqueryToJoinRule
+from .rules.negation import NegationRule
+from .rules.order_by_rand import OrderByRandRule
+from .rules.union_dedup import UnionDedupRule
+from .rules.redundant_distinct import RedundantDistinctRule
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,7 @@ DEFAULT_RULES = [
     MissingIndexRule(), SelectStarRule(), LeadingWildcardRule(),
     FunctionOnColumnRule(), ImplicitCastRule(), NoLimitRule(),
     DeepPaginationRule(), OrConditionRule(), SubqueryToJoinRule(),
+    NegationRule(), OrderByRandRule(), UnionDedupRule(), RedundantDistinctRule(),
 ]
 
 
