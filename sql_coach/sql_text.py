@@ -1,6 +1,7 @@
 """SQL 文本清洗工具：剥离注释与字符串字面量，供解析产物（SQLInfo）与规则使用。
 
-- ``strip_comments``：去掉 ``--``/``/* */`` 注释（跳过引号内文本）。
+- ``strip_comments``：去掉 ``--``/``/* */`` 注释（跳过引号内文本），
+  但保留 MySQL 可执行注释 ``/*! ... */`` 与优化器提示 ``/*+ ... */``。
 - ``strip_literals``：清空字符串字面量内容、保留引号本身。
 - ``clean``：先去注释再清字面量，供「关键字类」规则匹配前使用。
 
@@ -51,6 +52,16 @@ def strip_comments(sql: str) -> str:
                 i += 1
             continue  # 行尾换行保留（若存在）
         if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            # MySQL 可执行注释 /*! ... */ 与优化器提示 /*+ ... */ 都是真 SQL，
+            # 会影响语义/执行计划，必须原样保留；仅剥离普通 /* ... */ 注释。
+            if i + 2 < n and sql[i + 2] in "!+":
+                end = i + 2
+                while end + 1 < n and not (sql[end] == "*" and sql[end + 1] == "/"):
+                    end += 1
+                end = min(end + 2, n)
+                out.append(sql[i:end])
+                i = end
+                continue
             i += 2
             while i + 1 < n and not (sql[i] == "*" and sql[i + 1] == "/"):
                 i += 1

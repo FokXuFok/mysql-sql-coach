@@ -102,7 +102,10 @@ def _estimate_selectivity(conn, sql: str, table: Optional[str],
     matched_known = False
     if sql and sql.strip().upper().startswith("SELECT"):
         try:
-            rows = conn.query(f"SELECT COUNT(*) FROM ({sql}) AS _probe", ())
+            # 不传第二个参数：pymysql 对非 None 的 args 会执行 ``sql % args``，
+            # 而用户 SQL 可能含 %（如 LIKE '%abc'、DATE_FORMAT(x,'%Y')），
+            # 透传空 tuple 会抛 TypeError 导致选择性恒为 -1。
+            rows = conn.query(f"SELECT COUNT(*) FROM ({sql}) AS _probe")
             if rows:
                 matched_rows = int(rows[0][0] or 0)
                 matched_known = True
@@ -192,7 +195,11 @@ def measure_index_impact(conn, sql: str, ddls: list[str],
         conn, sql, _first_table(ddls))
 
     recommended = speedup >= INDEX_SPEEDUP_THRESHOLD
-    if recommended:
+    if not applied and skipped_ddls:
+        # 所有 DDL 都被跳过（索引已存在或无法解析），无从实测收益。
+        recommended = False
+        verdict = "索引已存在，无需创建"
+    elif recommended:
         if speedup == float("inf"):
             verdict = "索引有效（实测提速 无限大），建议采纳"
         else:
@@ -200,9 +207,11 @@ def measure_index_impact(conn, sql: str, ddls: list[str],
     else:
         if selectivity >= 0:
             verdict = (f"索引收益有限（实测提速 {speedup:.2f}x，"
+                       f"低于阈值 {INDEX_SPEEDUP_THRESHOLD:.2f}x，"
                        f"命中率约 {selectivity * 100:.1f}%），不建议创建")
         else:
-            verdict = f"索引收益有限（实测提速 {speedup:.2f}x），不建议创建"
+            verdict = (f"索引收益有限（实测提速 {speedup:.2f}x，"
+                       f"低于阈值 {INDEX_SPEEDUP_THRESHOLD:.2f}x），不建议创建")
 
     return IndexImpact(
         before_time=before_time,

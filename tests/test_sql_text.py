@@ -17,6 +17,23 @@ def test_strip_comments_keeps_comment_markers_inside_literals():
         "SELECT '-- x' AS a, '/* y */' AS b"
 
 
+def test_strip_comments_keeps_executable_comment():
+    """MySQL 可执行注释 /*! ... */ 是真 SQL，必须原样保留。"""
+    sql = "SELECT /*! STRAIGHT_JOIN */ * FROM t"
+    assert strip_comments(sql) == sql
+
+
+def test_strip_comments_keeps_optimizer_hint():
+    """优化器提示 /*+ ... */ 影响执行计划，必须原样保留。"""
+    sql = "SELECT /*+ INDEX(t i) */ a FROM t"
+    assert strip_comments(sql) == sql
+
+
+def test_strip_comments_still_strips_plain_block_comment():
+    """普通 /* ... */ 注释仍应被剥离。"""
+    assert strip_comments("SELECT /* c */ a FROM t") == "SELECT   a FROM t"
+
+
 def test_strip_comments_empty():
     assert strip_comments("") == ""
 

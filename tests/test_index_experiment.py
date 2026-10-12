@@ -14,7 +14,8 @@ class FakeConnector:
     def __init__(self, connected=True, existing_indexes=None,
                  fail_on=None, benchmark_times=None, query_raises=False,
                  total_rows=None, matched_rows=None,
-                 count_raises=False, total_raises=False):
+                 count_raises=False, total_raises=False,
+                 benchmark_raises=False):
         self.connected = connected
         self.existing_indexes = set(existing_indexes or [])
         self.fail_on = fail_on
@@ -24,6 +25,7 @@ class FakeConnector:
         self.matched_rows = matched_rows
         self.count_raises = count_raises
         self.total_raises = total_raises
+        self.benchmark_raises = benchmark_raises
         self.executed = []
         self.queries = []
         self.benchmark_calls = 0
@@ -59,6 +61,8 @@ class FakeConnector:
         self.executed.append(sql)
 
     def benchmark(self, sql, runs=3):
+        if self.benchmark_raises:
+            raise RuntimeError("benchmark boom")
         i = self.benchmark_calls
         self.benchmark_calls += 1
         if self.benchmark_times:
@@ -272,3 +276,76 @@ def test_measure_inf_speedup_recommended():
     assert result.speedup == float("inf")
     assert result.recommended is True
     assert "建议采纳" in result.verdict
+
+
+# ---- Important-1：含 % 的 SQL 选择性探测 ----
+
+def test_measure_selectivity_probe_omits_empty_params():
+    """探测 COUNT(*) 不应透传空 tuple，否则 pymysql 会对含 % 的 SQL 做格式化而报错。"""
+    conn = FakeConnector(benchmark_times=[0.24, 0.005],
+                         total_rows=100000, matched_rows=1010)
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    sql = "SELECT * FROM t WHERE name LIKE '%abc'"
+    result = measure_index_impact(conn, sql, [ddl])
+
+    probes = [(q, p) for q, p in conn.queries if "COUNT(*)" in q]
+    assert probes, "应执行 COUNT(*) 探测"
+    assert all(p is None for _q, p in probes)
+    # 含 % 的 SQL 仍能正确算出选择性
+    assert abs(result.selectivity - 0.0101) < 1e-9
+
+
+# ---- Minor-3：阈值文案精度 ----
+
+def test_measure_not_recommended_verdict_includes_threshold():
+    """不推荐时文案应带出阈值，避免 1.295 → 显示 1.30x 却判「不建议」的矛盾。"""
+    conn = FakeConnector(benchmark_times=[0.24, 0.24],
+                         total_rows=100000, matched_rows=1010)
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    result = measure_index_impact(conn, "SELECT * FROM t WHERE a=1", [ddl])
+    assert result.recommended is False
+    assert "低于阈值" in result.verdict
+    assert "1.30x" in result.verdict
+    assert "命中率" in result.verdict
+
+
+def test_measure_not_recommended_verdict_omits_hit_rate_when_unknown():
+    """无选择性时，不推荐文案省略命中率部分但仍带阈值。"""
+    conn = FakeConnector(benchmark_times=[0.24, 0.24])
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    result = measure_index_impact(conn, "SELECT * FROM t WHERE a=1", [ddl])
+    assert result.selectivity == -1.0
+    assert result.recommended is False
+    assert "低于阈值" in result.verdict
+    assert "命中率" not in result.verdict
+
+
+# ---- Minor-4：索引全部已存在 ----
+
+def test_measure_all_indexes_exist_verdict():
+    """所有 DDL 因索引已存在被跳过时，结论应为「索引已存在，无需创建」。"""
+    conn = FakeConnector(existing_indexes={"idx_a"}, benchmark_times=[0.2, 0.05])
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    result = measure_index_impact(conn, "SELECT 1", [ddl])
+
+    assert result.applied_ddls == []
+    assert result.skipped_ddls == [ddl]
+    assert result.recommended is False
+    assert result.verdict == "索引已存在，无需创建"
+    # 不伪造耗时：保留基准实测值
+    assert result.before_time == 0.2
+    assert result.after_time == 0.05
+
+
+# ---- Minor-5：benchmark 异常兜底 ----
+
+def test_measure_benchmark_error_is_contained():
+    """benchmark 抛异常时不向上抛、applied_ddls 为空、rolled_back 为 True、error 非空。"""
+    conn = FakeConnector(benchmark_raises=True)
+    ddl = "CREATE INDEX idx_a ON t(a);"
+    result = measure_index_impact(conn, "SELECT 1", [ddl])
+
+    assert result is not None
+    assert result.applied_ddls == []
+    assert result.rolled_back is True
+    assert result.error != ""
