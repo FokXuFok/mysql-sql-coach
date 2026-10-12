@@ -438,3 +438,38 @@ sql-coach/
   `NoLimitRule` 改用词边界正则 `\bLIMIT\b`。
 
 截至本轮结束，全量测试为 **235 passed**。
+
+## 18. 后续增补：索引实测模式与收益守卫
+
+> 本节记录在 P0/P1/P2 收尾之后、基于真实 MySQL 实测追加的能力，非原设计内容。
+
+### 18.1 动机
+原管线的 benchmark 比较的是"原始 SQL vs 改写后 SQL"，但本地引擎的建议主体是**索引 DDL**，
+索引的收益体现在"建索引前后"——因此对索引建议类问题，原 benchmark 恒为 ~1.0x，**结论失真**。
+
+### 18.2 索引实测模式（`sql_coach/index_experiment.py`）
+`measure_index_impact(conn, sql, ddls, runs)`：临时建索引 → `ANALYZE TABLE` → 复测 → **`finally` 回滚**。
+
+- 索引已存在 → 跳过（既不创建也不删除）
+- 回滚失败 → `rolled_back=False` + `error` + `logger.error`（不静默）
+- 异常不外抛；默认**关闭**（`Config.measure_index=False` / `MEASURE_INDEX=false` / CLI `--measure-index`）
+- mock 模式或未连接时完全跳过
+
+### 18.3 收益守卫（数据驱动）
+在真实 MySQL（orders 10 万行）上做选择性扫描：
+
+| 命中率 | 0.05% | 1.01% | 4.99% | 10% | 20% | 30% | 50% | 100% |
+|--------|-------|-------|-------|-----|-----|-----|-----|------|
+| 提速 | 52.7x | 5.25x | 1.15x | 1.03x | 1.01x | 1.01x | 0.99x | 1.00x |
+
+**索引在选择性约 1%~5% 之间失效**，据此取阈值 `INDEX_SPEEDUP_THRESHOLD = 1.3`：
+`recommended = speedup >= 1.3`，并输出 `selectivity` / `matched_rows` / `total_rows` / `verdict`。
+
+### 18.4 解析层清洗
+`SQLInfo` 提供两个惰性 property（**不是字段**，避免破坏既有直接构造）：
+- `clean_sql`（去注释 + 清空字面量）→ 关键字类规则
+- `nocomment_sql`（只去注释、保留字面量）→ 需要匹配字面量的规则
+  （`leading_wildcard` / `function_on_column` / `select_star.rewrite`）
+
+`strip_comments` **保留** `/*! ... */`（MySQL 可执行注释）与 `/*+ ... */`（优化器提示），
+只剥离普通注释——否则改写产物会丢失它们、改变执行计划。
