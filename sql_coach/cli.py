@@ -157,7 +157,8 @@ def config_test():
 
 @main.command()
 @click.option("--fix", is_flag=True, help="自动修复可安全修复的项（如生成 .env 模板）")
-def doctor(fix):
+@click.option("--probe", is_flag=True, help="额外对 Ollama 做轻量连通性试连")
+def doctor(fix, probe):
     """环境自检：检查 .env / MySQL / AI 配置 / 运行环境。"""
     from .diagnostics.checks import run_all
     from .diagnostics.installer import apply_auto_fixes
@@ -165,11 +166,11 @@ def doctor(fix):
 
     config = load_config()
     env_path = ".env"
-    results = run_all(config, env_path)
+    results = run_all(config, env_path, probe=probe)
     if fix:
         for o in apply_auto_fixes(results, env_path):
             console.print(f"[cyan]{o.message}[/cyan]")
-        results = run_all(config, env_path)
+        results = run_all(config, env_path, probe=probe)
     console.print(format_results(results))
 
 

@@ -19,7 +19,7 @@ def apply_auto_fixes(results: list[CheckResult], env_path: str = ".env") -> list
     for r in results:
         if r.status == "ok" or not r.auto_fixable:
             continue
-        if r.name.startswith("配置文件"):
+        if r.key == "env_file":
             outcomes.append(_create_env_file(env_path))
     return outcomes
 

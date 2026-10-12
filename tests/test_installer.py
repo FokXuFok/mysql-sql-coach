@@ -6,7 +6,7 @@ from sql_coach.diagnostics.report import format_results
 
 def test_apply_auto_fixes_creates_env(tmp_path):
     env_path = tmp_path / ".env"
-    results = [CheckResult("配置文件 .env", "warn", "缺失", auto_fixable=True)]
+    results = [CheckResult("配置文件 .env", "warn", "缺失", auto_fixable=True, key="env_file")]
     outcomes = apply_auto_fixes(results, str(env_path))
     assert env_path.exists()
     assert any(o.applied for o in outcomes)

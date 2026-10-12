@@ -74,6 +74,14 @@ def test_cli_has_doctor_command():
     assert "自检" in result.output or "doctor" in result.output.lower()
 
 
+def test_cli_doctor_has_probe_option():
+    from click.testing import CliRunner
+    from sql_coach.cli import main
+    result = CliRunner().invoke(main, ["doctor", "--help"])
+    assert result.exit_code == 0
+    assert "--probe" in result.output
+
+
 def test_cli_analyze_has_engine_option():
     from click.testing import CliRunner
     from sql_coach.cli import main
