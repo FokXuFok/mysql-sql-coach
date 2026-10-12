@@ -23,7 +23,8 @@ SQL Coach 输入一条 SQL，自动连接 MySQL 执行 EXPLAIN，调用 AI 大�
 - GUI 支持历史记录、Markdown / HTML 报告导出
 - 内置 Docker 测试环境（10 万行测试数据）
 - 无数据库时降级为 AI 推理模式（mock）
-- 本地规则引擎：简单/中等 SQL 毫秒级优化，复杂 SQL 才调用 AI（自动分流）
+- 本地规则引擎：13 条规则，简单/中等 SQL 毫秒级优化，复杂 SQL 才调用 AI（自动分流）
+- 索引实测模式：临时建索引 → 复测 → 自动回滚，基于选择性数据给出"建议采纳/不建议创建"结论
 - 启动环境自检：自动检测 .env / MySQL / AI 配置，能安全修复的自动修复
 - 跨平台支持：Windows / macOS / Linux
 
@@ -32,6 +33,8 @@ SQL Coach 输入一条 SQL，自动连接 MySQL 执行 EXPLAIN，调用 AI 大�
 ### 方式一：桌面 GUI（推荐普通用户）
 
 从 [Releases](https://github.com/FokXuFok/mysql-sql-coach/releases) 下载对应平台的压缩包，解压后即可使用，无需安装 Python。
+
+本地开发构建的 exe 位于项目根目录 `sql-coach-gui.exe`（仅 Windows，其他平台从 Release 下载）。
 
 | 平台 | 下载文件 | 启动方式 |
 |------|---------|---------|
@@ -179,8 +182,11 @@ pytest --cov=sql_coach --cov-report=html
 # GUI 开发模式
 python main.py --gui
 
-# 打包 GUI (需要 pyinstaller)
-pyinstaller sql-coach.spec --clean --noconfirm
+# 打包 GUI (onefile, exe 输出到项目根目录)
+pyinstaller sql-coach-onefile.spec --clean --noconfirm --distpath .
+
+# 打包 GUI (onedir, 输出到项目根目录的 sql-coach-gui/ 文件夹)
+pyinstaller sql-coach.spec --clean --noconfirm --distpath .
 ```
 
 ## 项目结构
@@ -191,24 +197,34 @@ sql-coach/
 │   ├── ai/                 # AI 引擎 (DeepSeek/OpenAI/Ollama/Mock + 工厂)
 │   ├── db/                 # 数据库连接器 (MySQL + Mock)
 │   ├── engine/             # SQL 解析 + EXPLAIN 结果解析
+│   ├── local/              # 本地规则引擎 (13 条规则 + 复杂度评分 + schema 读取)
 │   ├── report/             # 性能对比 + 报告格式化
+│   ├── diagnostics/        # 启动环境自检 (检查 + 修复 + 报告)
 │   ├── models.py           # 数据模型 (dataclass)
 │   ├── config.py           # 配置加载 (.env)
 │   ├── coach.py            # 主编排服务
+│   ├── optimizer.py        # 优化器分流 (auto/local/ai)
+│   ├── index_experiment.py # 索引实测模式 (临时建索引 → 复测 → 回滚)
+│   ├── sql_text.py         # SQL 文本清洗 (去注释/清字面量)
+│   ├── cache.py            # AI 分析缓存 (SQLite)
 │   ├── interactive.py      # CLI 交互模式 (python main.py 入口)
 │   └── cli.py              # click 子命令入口
 ├── gui/                    # PySide6 桌面 GUI
 │   ├── app.py              # GUI 启动入口
 │   ├── main_window.py      # 主窗口
 │   ├── paths.py            # .env 路径处理 (打包/开发双模式)
-│   ├── widgets/            # 组件 (SQL 输入、EXPLAIN 表格、报告视图、图表、历史、设置)
+│   ├── widgets/            # 组件 (SQL 输入、EXPLAIN 表格、报告视图、图表、历史、设置、自检)
 │   ├── workers/            # 后台线程 (分析任务)
 │   └── storage/            # 历史记录存储 + 报告导出
+├── docs/                   # 文档
+│   ├── api-reference.md    # API 参考文档
+│   └── nl-to-sql-design.md # 自然语言转 SQL 设计文档
 ├── main.py                 # 入口: 打包走 GUI, 开发走 CLI
+├── sql-coach-onefile.spec  # PyInstaller 打包配置 (onefile, exe 输出到根目录)
 ├── sql-coach.spec          # PyInstaller 打包配置 (onedir)
 ├── .github/workflows/      # CI: 三平台并行构建 Release
 ├── docker/                 # Docker 测试环境
-└── tests/                  # 测试
+└── tests/                  # 测试 (327 passed)
 ```
 
 ## 技术栈
@@ -218,7 +234,7 @@ sql-coach/
 - **SQL 解析**: sqlparse
 - **数据库**: pymysql
 - **AI**: openai SDK (兼容 DeepSeek/OpenAI) + httpx (Ollama)
-- **打包**: PyInstaller (onedir 模式, 三平台分发)
+- **打包**: PyInstaller (onefile + onedir 双模式, 三平台分发)
 - **CI**: GitHub Actions (Windows / macOS / Linux 三平台并行构建)
 - **测试**: pytest + pytest-mock + pytest-cov
 

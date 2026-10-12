@@ -1,6 +1,13 @@
 # sql-coach.spec
 # -*- mode: python ; coding: utf-8 -*-
-"""SQL Coach GUI PyInstaller 配置 (onedir, 含 .env.example 模板)。"""
+"""SQL Coach GUI PyInstaller 配置 (onedir, 含 .env.example 模板)。
+
+本地构建（输出到项目根目录的 sql-coach-gui/ 文件夹）:
+    pyinstaller sql-coach.spec --clean --noconfirm --distpath .
+
+CI 构建（输出到 dist-onedir/）:
+    pyinstaller sql-coach.spec --clean --noconfirm --distpath dist-onedir
+"""
 
 block_cipher = None
 

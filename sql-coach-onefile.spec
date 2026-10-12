@@ -1,6 +1,13 @@
 # sql-coach-onefile.spec
 # -*- mode: python ; coding: utf-8 -*-
-"""SQL Coach GUI 单文件打包配置 (onefile)。"""
+"""SQL Coach GUI 单文件打包配置 (onefile)。
+
+本地构建（exe 输出到项目根目录）:
+    pyinstaller sql-coach-onefile.spec --clean --noconfirm --distpath .
+
+CI 构建（exe 输出到 dist/，再打包为 zip 上传 Release）:
+    pyinstaller sql-coach-onefile.spec --clean --noconfirm
+"""
 
 block_cipher = None
 
