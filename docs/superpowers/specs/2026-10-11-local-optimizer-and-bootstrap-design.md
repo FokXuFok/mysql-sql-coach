@@ -412,10 +412,29 @@ sql-coach/
 （`test_models` / `test_coach` / `test_cli` / `test_settings_dialog` / `test_report_view` / `test_db_connector`）。
 既有用例本身未被修改，只做新增。分支起点 `master` 的测试基线为 **129** 个用例（非设计稿所称 134）。
 
-### 17.8 已知遗留项（非阻塞）
+### 17.8 已知遗留项
 
-- `gui/main_window.py` 的 `_check_db_connection` 在连库失败时弹**模态** `QMessageBox`，
-  这是改动前就存在的代码；无数据库环境下启动仍会被它阻塞（与本期的自检对话框无关）。
-- `installer.apply_auto_fixes` 用 `CheckResult.name.startswith("配置文件")` 做分支判断，
-  属字符串耦合（改展示名即静默失效），后续可改为机器可读的 key。
-- `copy_hint` 失败时 UI 无反馈；`check_runtime` 仅查 Python 版本（见 17.5）。
+以下三项在后续的 P2 收口轮次中**已修复**：
+
+- ~~`gui/main_window.py` 的 `_check_db_connection` 在连库失败时弹**模态** `QMessageBox`~~
+  → 已改为非模态 `show()` 并保持引用，启动路径不再阻塞（提交 `276c8d5`）。
+- ~~`installer.apply_auto_fixes` 用 `CheckResult.name.startswith("配置文件")` 做分支判断~~
+  → 已改为机器可读的 `CheckResult.key` / `FixOutcome.key`（提交 `1770425`、`285bfe4`）。
+- ~~`copy_hint` 失败时 UI 无反馈；`check_runtime` 仅查 Python 版本~~
+  → 已补复制失败提示；`check_runtime` 已用 `find_spec` 检查依赖是否存在（不真正 import）
+  （提交 `276c8d5`、`285bfe4`）。
+
+### 17.9 P2 收口轮的其它修正
+
+- **M9 文案**：本地模式下不再出现 "AI" 字样。除 GUI 外，还需修
+  `sql_coach/report/formatter.py`（给 `format_report()` 增加可选参数 `engine_used: str = "ai"`，
+  默认行为不变——这是对"`report/` 不改动"的**纯增量例外**）、`cli.py`、`interactive.py`、
+  `main_window.py` 状态栏。
+- **M2/M3 评分补全**：新增"多列 `GROUP BY` +1"（按顶层逗号计数，函数内逗号不虚高）与
+  "嵌套函数表达式 +2"（排除 `IN/EXISTS` 等关键字伪函数）。
+- **M5 可选试连**：`check_ai(config, probe=False)`，**默认不联网**；仅 `probe=True` 且 model 为
+  ollama 时做 2 秒超时探测；CLI 通过 `doctor --probe` 启用。
+- **M10/M11**：`_explain` 的"未校验"提示仅在该表未校验**且**命中 `missing_index` 时追加；
+  `NoLimitRule` 改用词边界正则 `\bLIMIT\b`。
+
+截至本轮结束，全量测试为 **235 passed**。

@@ -1,7 +1,7 @@
 # 剩余任务交接 · 本地算法分流功能
 
-> 生成时间：2026-10-12 00:25
-> 分支：`feat/local-optimizer-bootstrap`（**尚未合并到 `master`**）
+> 生成时间：2026-10-12 00:25（**2026-10-12 中午更新：P0/P1/P2 已全部完成**）
+> 分支：已合并到 `master`（原特性分支 `feat/local-optimizer-bootstrap` 保留）
 > 关联文档：`docs/superpowers/specs/2026-10-11-local-optimizer-and-bootstrap-design.md`（设计）
 > 　　　　　`docs/superpowers/plans/2026-10-11-local-optimizer-and-bootstrap.md`（实施计划）
 
@@ -12,10 +12,12 @@
 | 项 | 状态 |
 |----|------|
 | 计划 Task 0–18 | ✅ **全部实现并提交** |
-| 领先 master | 27 个提交 |
-| 全量测试 | ✅ `199 passed`（master 基线 129） |
+| P0 / P1 / P2 后续项 | ✅ **全部完成**（见第三、四节） |
+| 分支 | ✅ 已 `--no-ff` 合并到 `master`（merge commit `eabb44d`） |
+| 全量测试 | ✅ `235 passed`（master 原基线 129） |
 | 每个任务的审查 | ✅ 均过"规格符合性 + 代码质量"两阶段审查 |
-| 工作区 | 干净（仅 `.wheels/`、`.workbuddy-ai/` 两个未跟踪目录） |
+| 工作区 | 干净（`.wheels/`、`.workbuddy-ai/`、打包目录已 gitignore） |
+| 远程 | ⚠️ 领先 `origin/master` 若干提交，**尚未 push**（对外操作，待确认） |
 
 ### 已实现的核心能力
 
@@ -71,6 +73,12 @@
 ---
 
 ## 三、剩余任务
+
+> **2026-10-12 更新：P0-1 ~ P0-3、P1-1 ~ P1-3 已全部完成。**
+> P0-1 `81e811c`（本地引擎失败降级 AI）、P0-2 `cd5358f`（gitignore）、P0-3 `92063c5`（spec 第 17 节）、
+> P1-1 CI YAML 校验通过、P1-2 已 `--no-ff` 合并到 master `eabb44d`、P1-3 打包成功
+> （`dist-onefile/sql-coach-gui.exe`，83MB 单文件）。
+> 以下原始描述保留作记录。
 
 ### P0 — 合并前应当完成
 
@@ -151,25 +159,37 @@
 `sql-coach-onefile.spec` 只做过 `ast.parse` 语法校验，**未真正构建过**。
 可执行：`pyinstaller sql-coach-onefile.spec --clean --noconfirm`（需先装 pyinstaller）。
 
-### P2 — 遗留质量项（非阻塞，可延后）
+### P2 — 遗留质量项 ✅ **已全部完成**（2026-10-12）
 
-| 编号 | 问题 | 位置 |
-|------|------|------|
-| I2 | 连库失败时弹**模态** `QMessageBox`，无数据库环境会阻塞启动（**改动前就存在**） | `gui/main_window.py` `_check_db_connection` |
-| M2 | 评分未统计"多列 `GROUP BY`" | `local/complexity.py` |
-| M3 | 评分未识别"嵌套函数表达式" | `local/complexity.py` |
-| M4 | 运行环境自检只查 Python 版本 | `diagnostics/checks.py` |
-| M5 | `check_ai` 无轻量试连 | `diagnostics/checks.py` |
-| M6 | 用 `name.startswith("配置文件")` 判断修复分支，改名即静默失效 | `diagnostics/installer.py` |
-| M7 | `copy_hint` 失败时 UI 无任何提示 | `gui/widgets/diagnostics_dialog.py` |
-| M8 | `config is None` 时把所有可修复项乐观标为 ok | `gui/widgets/diagnostics_dialog.py` |
-| M9 | 本地模式下仍打印"🤖 AI 分析中" | `sql_coach/cli.py`、`sql_coach/interactive.py` |
-| M10 | `_explain` 的"未校验"提示与规则无关时也会追加 | `local/engine.py` |
-| M11 | `NoLimitRule` 用子串判断 `LIMIT` | `local/rules/no_limit.py` |
+| 编号 | 问题 | 修复提交 |
+|------|------|---------|
+| I2 | 连库失败弹**模态** `QMessageBox` → 改为非模态 `show()` + 引用保持，启动路径不再阻塞 | `276c8d5` |
+| M2 | 评分未统计"多列 `GROUP BY`" → 补 `+1`（按**顶层逗号**计数，函数内逗号不虚高） | `b430f59`、`dbfd396` |
+| M3 | 评分未识别"嵌套函数表达式" → 补 `+2`（排除 `IN/EXISTS` 等关键字伪函数） | `b430f59`、`dbfd396` |
+| M4 | 运行环境自检只查 Python 版本 → 补依赖存在性检查（用 `find_spec`，**不真正 import**，避免拖慢启动） | `1770425`、`285bfe4` |
+| M5 | `check_ai` 无轻量试连 → 加 `probe` 参数（**默认 False 不联网**；Ollama 才试连），CLI `doctor --probe` 可选启用 | `1770425` |
+| M6 | 用 `name.startswith("配置文件")` 判断修复分支 → 改用机器可读 `CheckResult.key` | `1770425`、`285bfe4` |
+| M7 | `copy_hint` 失败无提示 → 按钮文案显示"❌ 复制失败，请手动选择命令" | `276c8d5` |
+| M8 | `config is None` 时乐观标 ok → 改为只对 `applied=True` 的项标 ok | `276c8d5` |
+| M9 | 本地模式仍显示"AI"字样 → 修 `formatter.py`（加可选 `engine_used` 参数）、`cli.py`、`interactive.py`、`report_view.py`、`main_window.py` 状态栏 | `e7a3957`、`c3dc9b1` |
+| M10 | `_explain` 的"未校验"提示过度触发 → 仅命中 `missing_index` 且未校验时才追加 | `b430f59` |
+| M11 | `NoLimitRule` 用子串判断 `LIMIT` → 改词边界正则 `\bLIMIT\b` | `b430f59` |
+
+> **说明**：M9 首轮只改了 GUI 与提示文案，审查发现 CLI/交互模式实际输出由
+> `sql_coach/report/formatter.py` 渲染（硬编码 `🤖 AI 解释:`），故补做 `c3dc9b1`——
+> 给 `format_report()` 增加**可选参数** `engine_used: str = "ai"`（默认行为不变，属对
+> "`report/` 不改动"的纯增量例外）。
+>
+> 全量测试：**235 passed**（P2 开工前为 200），进程正常退出。
 
 ---
 
 ## 四、继续开发的推荐顺序
+
+> **2026-10-12 更新：以下 1–5 步已全部完成，6（P2）亦已完成。**
+> 当前无未完成的既定任务；后续可选方向见文末"下一步可选"。
+
+原推荐顺序（保留作记录）：
 
 1. 先做 **P0-1**（功能缺口，有 spec 依据）→ 跑全量测试
 2. **P0-2**（.gitignore）→ 顺手清理 `git status`
@@ -177,6 +197,17 @@
 4. **P1-1 / P1-3**（校验 YAML、试打包）
 5. **P1-2**（合并分支）
 6. P2 视需要处理
+
+---
+
+## 下一步可选（均非阻塞）
+
+1. **`git push`** 到 `origin/master`（对外操作，需你确认）
+2. 用真实 MySQL（`docker/` 里的测试库，10 万行 orders）跑一次端到端，
+   看本地引擎的索引建议 + benchmark 提速在真实数据上的表现
+3. 实机试跑 `dist-onefile/sql-coach-gui.exe`，验证 onefile 启动与自检对话框
+4. 若要把本地规则覆盖面做大：可继续加规则（如 `NOT IN`、`IS NULL`、`UNION` 去重、
+   隐式排序等），并考虑给 `MissingIndexRule` 支持多表（需借助 schema 反查列归属）
 
 ## 五、快速自检命令
 
