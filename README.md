@@ -74,7 +74,7 @@ DEEPSEEK_API_KEY=你的API key
 - 分析报告区域展示 EXPLAIN 表格、AI 优化建议、索引 DDL、性能对比柱状图
 - 历史记录对话框可查看之前的分析记录
 - 一键导出 Markdown / HTML 报告
-- 设置对话框可调整 AI 模型、数据库连接、性能对比次数
+- 设置对话框可调整 AI 模型、数据库连接、性能对比次数、索引实测开关
 
 ### 方式二：命令行 CLI（推荐开发者）
 
@@ -224,7 +224,7 @@ sql-coach/
 ├── sql-coach.spec          # PyInstaller 打包配置 (onedir)
 ├── .github/workflows/      # CI: 三平台并行构建 Release
 ├── docker/                 # Docker 测试环境
-└── tests/                  # 测试 (327 passed)
+└── tests/                  # 测试 (329 passed)
 ```
 
 ## 技术栈
@@ -262,6 +262,24 @@ COMPLEXITY_THRESHOLD=8
 ```bash
 sql-coach analyze --engine local "SELECT * FROM orders WHERE status='pending'"
 ```
+
+## 索引实测模式（可选）
+
+普通性能对比测的是「原始 SQL vs 改写后 SQL」，而索引类建议不改写 SQL，提速恒为 1.0x。
+开启索引实测后，程序会**临时创建建议索引 → 复测同一 SQL → 自动回滚**，
+基于真实选择性给出「建议采纳 / 不建议创建」结论（实测提速 < 1.3x 判为不建议）。
+
+在 `.env` 中开启（默认关闭）：
+
+```ini
+# 是否实测索引收益（会临时建索引→复测→回滚，请谨慎开启）
+MEASURE_INDEX=true
+```
+
+GUI 也可在「设置」对话框中随时开关；CLI 可用 `--measure-index` 临时开启。
+
+> **注意**：该模式会对数据库执行 DDL（建索引/删索引），需要相应权限，
+> 请勿在无法建索引或不愿承担 DDL 风险的生产库上开启。
 
 ## License
 
