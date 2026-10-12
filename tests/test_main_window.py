@@ -48,6 +48,40 @@ def test_analyze_with_empty_sql_does_nothing(app):
     assert win.worker is None
 
 
+def _make_report(engine_used: str):
+    from sql_coach.coach import Report
+    from sql_coach.models import AnalysisResult, Complexity, SQLInfo
+
+    return Report(
+        sql_info=SQLInfo(raw_sql="SELECT 1", sql_type="SELECT", tables=[],
+                         columns=[], where_conditions=[], join_tables=[], order_by=[]),
+        explain=None,
+        analysis=AnalysisResult(problems=[], optimized_sql="SELECT 1",
+                                index_ddls=[], explanation="ok"),
+        benchmark=None,
+        engine_used=engine_used,
+        complexity=Complexity(level="simple", score=0, reasons=[]),
+    )
+
+
+def test_status_bar_shows_local_engine(app):
+    """本地引擎时状态栏显示「本地规则」而非 AI。"""
+    win = MainWindow(config=make_config())
+    win._on_analyze_finished(_make_report("local"))
+    msg = win.status_bar.currentMessage()
+    assert "本地规则" in msg
+    assert "AI:" not in msg
+
+
+def test_status_bar_shows_ai_engine(app):
+    """AI 引擎时状态栏显示引擎名。"""
+    win = MainWindow(config=make_config())
+    win._on_analyze_finished(_make_report("deepseek"))
+    msg = win.status_bar.currentMessage()
+    assert "deepseek" in msg
+    assert "耗时" in msg
+
+
 def make_real_config():
     """非 mock 配置: 用于触发 _check_db_connection 的真实分支。"""
     cfg = make_config()

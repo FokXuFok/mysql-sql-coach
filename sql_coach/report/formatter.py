@@ -62,6 +62,7 @@ def format_report(
     explain: Optional[ExplainResult],
     analysis: AnalysisResult,
     benchmark: Optional[BenchmarkResult],
+    engine_used: str = "ai",
 ) -> str:
     """Format full report and return as string."""
     buffer = StringIO()
@@ -95,9 +96,10 @@ def format_report(
         for ddl in analysis.index_ddls:
             buf_console.print(f"  [cyan]{ddl}[/cyan]")
 
-    # AI explanation
+    # AI explanation / 本地规则说明（按引擎动态显示标题）
     if analysis.explanation:
-        buf_console.print("\n[bold]🤖 AI 解释:[/bold]")
+        title = "📋 本地规则说明" if engine_used == "local" else "🤖 AI 解释"
+        buf_console.print(f"\n[bold]{title}:[/bold]")
         buf_console.print(f"  {analysis.explanation}")
 
     # Benchmark

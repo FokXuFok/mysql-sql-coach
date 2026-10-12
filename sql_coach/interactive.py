@@ -39,7 +39,8 @@ def analyze_one(coach: SQLCoach, sql: str) -> None:
     # 打印完整报告
     console.print(format_report(
         report.sql_info, report.explain,
-        report.analysis, report.benchmark
+        report.analysis, report.benchmark,
+        engine_used=report.engine_used,
     ))
 
     level = report.complexity.level if report.complexity else "-"
@@ -62,7 +63,7 @@ def analyze_one(coach: SQLCoach, sql: str) -> None:
 def run_cli() -> None:
     """交互式 CLI 入口: 循环读取 SQL 并分析, 输入 q 退出。"""
     console.print("[bold blue]╔════════════════════════════════════════════╗[/bold blue]")
-    console.print("[bold blue]║   SQL Coach - AI 慢查询优化教练          ║[/bold blue]")
+    console.print("[bold blue]║   SQL Coach - 慢查询优化教练             ║[/bold blue]")
     console.print("[bold blue]╚════════════════════════════════════════════╝[/bold blue]")
     console.print("输入 SQL 进行分析, 输入 [magenta]q[/magenta] 退出\n")
 

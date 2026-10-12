@@ -74,6 +74,43 @@ def test_format_report_with_benchmark():
     assert "57" in output
 
 
+def _minimal_report_parts():
+    sql_info = SQLInfo(
+        raw_sql="SELECT * FROM t", sql_type="SELECT",
+        tables=["t"], columns=["*"], where_conditions=[],
+        join_tables=[], order_by=[],
+    )
+    explain = ExplainResult(
+        rows=[], is_full_scan=False, missing_indexes=[], problems=[]
+    )
+    analysis = AnalysisResult(
+        problems=[], optimized_sql="SELECT id FROM t",
+        index_ddls=[], explanation="说明文字",
+    )
+    return sql_info, explain, analysis
+
+
+def test_format_report_local_engine_uses_local_title():
+    """M9: 本地引擎时标题应为「本地规则说明」而非「AI 解释」。"""
+    sql_info, explain, analysis = _minimal_report_parts()
+    output = format_report(sql_info, explain, analysis, None, engine_used="local")
+    assert "本地规则说明" in output
+    assert "AI 解释" not in output
+
+
+def test_format_report_default_engine_keeps_ai_title():
+    """既有 4 参数调用行为不变，默认仍显示「AI 解释」。"""
+    sql_info, explain, analysis = _minimal_report_parts()
+    output = format_report(sql_info, explain, analysis, None)
+    assert "AI 解释" in output
+
+
+def test_format_report_explicit_ai_engine_uses_ai_title():
+    sql_info, explain, analysis = _minimal_report_parts()
+    output = format_report(sql_info, explain, analysis, None, engine_used="ai")
+    assert "AI 解释" in output
+
+
 def test_format_report_with_inf_speedup():
     """Test report handles infinite speedup."""
     sql_info = SQLInfo(

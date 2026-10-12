@@ -216,8 +216,9 @@ class MainWindow(QMainWindow):
         self.sql_input.set_readonly(False)
         self._analyze_action.setEnabled(True)
         self.worker = None
+        engine = "本地规则" if report.engine_used == "local" else report.engine_used
         self.status_bar.showMessage(
-            f"完成 | AI: {elapsed/1000:.1f}s | 模型: {self.config.model}"
+            f"完成 | {engine} | 耗时 {elapsed/1000:.1f}s"
         )
 
     def _on_analyze_error(self, msg: str) -> None:

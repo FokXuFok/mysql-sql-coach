@@ -79,7 +79,8 @@ def analyze(sql, file, model, mock, no_cache, engine):
 
     # Print report
     output = format_report(report.sql_info, report.explain,
-                           report.analysis, report.benchmark)
+                           report.analysis, report.benchmark,
+                           engine_used=report.engine_used)
     console.print(output)
 
     level = report.complexity.level if report.complexity else "-"
