@@ -11,7 +11,9 @@ def test_cli_version():
     runner = CliRunner()
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    # 不硬编码版本号，避免每次升版本都要改测试
+    from sql_coach import __version__
+    assert __version__ in result.output
 
 
 def test_cli_help():

@@ -127,3 +127,41 @@ def test_save_writes_optimizer_fields(tmp_path):
     text = env_path.read_text(encoding="utf-8")
     assert "OPTIMIZER_MODE=" in text
     assert "COMPLEXITY_THRESHOLD=" in text
+
+
+def test_measure_index_checkbox_roundtrip(tmp_path, monkeypatch):
+    """设置里可开关索引实测，并写回 .env。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text("DB_HOST=localhost\nMEASURE_INDEX=true\n", encoding="utf-8")
+    from PySide6.QtWidgets import QApplication
+    from gui.widgets.settings_dialog import SettingsDialog
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setenv("MEASURE_INDEX", "true")
+    dlg = SettingsDialog(env_path=str(env_path))
+    assert dlg.measure_index_check.isChecked() is True
+
+    dlg.measure_index_check.setChecked(False)
+    dlg._save_to_env()
+    text = env_path.read_text(encoding="utf-8")
+    assert "MEASURE_INDEX=false" in text
+    assert "DB_HOST=localhost" in text          # 其它键保留
+
+
+def test_measure_index_checkbox_roundtrip(tmp_path, monkeypatch):
+    """设置里可开关索引实测，并写回 .env。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text("DB_HOST=localhost\nMEASURE_INDEX=true\n", encoding="utf-8")
+    from PySide6.QtWidgets import QApplication
+    from gui.widgets.settings_dialog import SettingsDialog
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setenv("MEASURE_INDEX", "true")
+    dlg = SettingsDialog(env_path=str(env_path))
+    assert dlg.measure_index_check.isChecked() is True
+
+    dlg.measure_index_check.setChecked(False)
+    dlg._save_to_env()
+    text = env_path.read_text(encoding="utf-8")
+    assert "MEASURE_INDEX=false" in text
+    assert "DB_HOST=localhost" in text          # 其它键保留

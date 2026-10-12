@@ -11,8 +11,8 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QRadioButton, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+    QLineEdit, QPushButton, QRadioButton, QVBoxLayout, QWidget,
 )
 
 # .env 字段顺序 (写回时用)
@@ -20,8 +20,14 @@ _ENV_KEYS = [
     "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
     "AI_MODEL", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
     "OLLAMA_URL", "OPTIMIZER_MODE", "COMPLEXITY_THRESHOLD",
-    "BENCHMARK_RUNS",
+    "MEASURE_INDEX", "BENCHMARK_RUNS",
 ]
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_bool(key: str, default: bool = False) -> bool:
+    return _get_env(key, "true" if default else "false").strip().lower() in _TRUE_VALUES
 
 
 def _get_env(key: str, default: str = "") -> str:
@@ -123,6 +129,8 @@ class SettingsDialog(QDialog):
         common_form.addRow("复杂度阈值:", self.threshold_edit)
         self.benchmark_runs_edit = QLineEdit()
         common_form.addRow("Benchmark 次数:", self.benchmark_runs_edit)
+        self.measure_index_check = QCheckBox("实测索引收益（临时建索引→复测→回滚，需建索引权限）")
+        common_form.addRow("索引实测:", self.measure_index_check)
         layout.addWidget(common_group)
 
         # --- 底部按钮 ---
@@ -160,6 +168,7 @@ class SettingsDialog(QDialog):
         idx = self.optimizer_mode_combo.findText(mode)
         self.optimizer_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.threshold_edit.setText(_get_env("COMPLEXITY_THRESHOLD", "8"))
+        self.measure_index_check.setChecked(_env_bool("MEASURE_INDEX", False))
 
         model = _get_env("AI_MODEL", "deepseek").lower()
         if model == "openai":
@@ -215,6 +224,7 @@ class SettingsDialog(QDialog):
             "OLLAMA_URL": self.ollama_url_edit.text(),
             "OPTIMIZER_MODE": self.optimizer_mode_combo.currentText(),
             "COMPLEXITY_THRESHOLD": self.threshold_edit.text() or "8",
+            "MEASURE_INDEX": "true" if self.measure_index_check.isChecked() else "false",
             "BENCHMARK_RUNS": self.benchmark_runs_edit.text(),
         }
 
