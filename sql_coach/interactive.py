@@ -23,7 +23,7 @@ def analyze_one(coach: SQLCoach, sql: str) -> None:
         sql += ";"
 
     console.print(f"\n[bold cyan]分析中: {sql}[/bold cyan]")
-    console.print("\U0001f916 AI 分析中 ...")
+    console.print("\U0001f50e 正在分析 SQL ...")
 
     def on_chunk(chunk):
         console.print(chunk, end="", style="dim", highlight=False)

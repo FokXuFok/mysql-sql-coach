@@ -61,8 +61,8 @@ def analyze(sql, file, model, mock, no_cache, engine):
     else:
         console.print("[green]\u2713[/green]")
 
-    # 简单文字提示 + AI 流式输出
-    console.print("\U0001f916 AI 分析中...")
+    # 简单文字提示 + 引擎流式输出
+    console.print("\U0001f50e 正在分析 SQL ...")
 
     def on_chunk(chunk):
         console.print(chunk, end="", style="dim", highlight=False)

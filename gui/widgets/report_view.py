@@ -196,9 +196,10 @@ class ReportView(QScrollArea):
         if index_widget is not None:
             self._layout.addWidget(index_widget)
 
-        # AI 解释
+        # 解释说明（按引擎动态显示标题）
         if report.analysis.explanation:
-            self._layout.addWidget(self._section_label("🤖 AI 解释"))
+            title = "📋 本地规则说明" if report.engine_used == "local" else "🤖 AI 解释"
+            self._layout.addWidget(self._section_label(title))
             expl = QLabel(report.analysis.explanation)
             expl.setWordWrap(True)
             expl.setStyleSheet("padding: 8px; background: #f5f5f5; border-radius: 4px;")

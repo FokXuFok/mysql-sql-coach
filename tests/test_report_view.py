@@ -94,3 +94,28 @@ def test_report_view_shows_engine_badge():
     view.set_report(report)
     texts = [w.text() for w in view.findChildren(QLabel)]
     assert any("本地" in t for t in texts)
+
+
+def test_explanation_title_local(app):
+    """M9: 本地引擎时解释标题为"本地规则说明"。"""
+    from PySide6.QtWidgets import QLabel
+
+    view = ReportView()
+    report = make_report()
+    report.engine_used = "local"
+    view.set_report(report)
+    texts = [w.text() for w in view.findChildren(QLabel)]
+    assert any("本地规则说明" in t for t in texts)
+    assert not any("AI 解释" in t for t in texts)
+
+
+def test_explanation_title_ai(app):
+    """M9: AI 引擎时解释标题仍为"AI 解释"。"""
+    from PySide6.QtWidgets import QLabel
+
+    view = ReportView()
+    report = make_report()
+    report.engine_used = "deepseek"
+    view.set_report(report)
+    texts = [w.text() for w in view.findChildren(QLabel)]
+    assert any("AI 解释" in t for t in texts)
