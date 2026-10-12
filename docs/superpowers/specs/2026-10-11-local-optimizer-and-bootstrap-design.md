@@ -360,3 +360,62 @@ sql-coach/
 - `sql_coach/report/*`
 - `sql_coach/cache.py`
 - `tests/` 下现有测试文件
+
+## 17. 实现说明（与设计的差异）
+
+实施完成后回填，如实记录实际实现与上述设计不一致之处，避免文档误导。
+
+### 17.1 接口落定（与 §5.1 / §6 的差异）
+
+- `Rule` 的方法签名最终为 `check(self, ctx: RuleContext)` / `rewrite(self, ctx)` / `ddls(self, ctx)`，
+  其中 `RuleContext(sql_info, schema)` 承载入参（而非设计稿写的 `check(self, sql_info, schema)`）。
+- 分流入口最终为 `select_optimizer(config, complexity, ai_factory) -> (optimizer, engine_name)`。
+  `ai_factory` 是零参可调用对象，**只在确实需要 AI 时才被调用**——纯本地模式不会创建 AI 客户端，也就不需要 API Key。
+
+### 17.2 相关子查询：设计有、实现无
+
+§4.1 曾列出"相关子查询 +5"。实现阶段发现纯正则启发式在"子查询含函数/嵌套括号"时漏判、
+在"子查询自带别名/派生表"时误判（双向都错），会把简单查询误抬成 complex、把复杂查询漏判为 medium。
+因此**本期不做相关子查询识别**，只保留"子查询/派生表 +3"。§4.1 评分表已同步删除该行。
+
+### 17.3 复杂度评分：两项特征未实现
+
+§4.1 的"多列分组（≥2 列）+1"与"嵌套函数表达式 +2"**未实现**
+（实现只覆盖 `CASE` 关键字与多列排序）。属有意缩减，后续可按需补齐。
+
+### 17.4 自动改写范围收敛为 2 条
+
+只有**语义可静态证明等价**的改写才自动执行：`select_star`（有 schema 且**单表**时展开列）、
+`function_on_column`（`DATE(col)='...'` → 范围条件）。深分页 / OR→UNION / 子查询→JOIN 一律只给建议。
+实现期另补了三条守卫：
+- `SELECT *` 改写在**多表 JOIN** 时放弃（展开单表列会改变结果集语义）；
+- `MissingIndexRule` 在**多表**时跳过（无法判断条件列归属哪张表，避免 DDL 指错表）；
+- 多条改写规则**叠加**生效（改写后用新 SQL 重建上下文），而非后写覆盖前写。
+
+### 17.5 启动自检的缩减
+
+- 运行环境检查（§7.1 第 4 项）实际只校验 **Python 版本**；VC++ 运行库、中文字体未做检测。
+- AI 检查（§7.1 第 3 项）只做 **Key 存在性与占位符格式判断**，未做"轻量试连"。
+- 分层修复（§7.2）实际只实现**生成 `.env` 模板**；"源码模式自动 `pip install` 缺失依赖"未实现，
+  依赖缺失仍由用户自行处理。类名最终为 `apply_auto_fixes`（非设计稿的 `AutoFixer`）。
+- 自检对话框在 `gui/app.py` 用**非模态 `show()`** 展示（而非模态 `exec()`），
+  并把对话框挂在 `QApplication` 上保持引用，避免在无数据库环境阻塞启动。
+
+### 17.6 本地引擎失败降级（§12 已落实）
+
+`SQLCoach.analyze()` 对本地引擎调用加了 try/except：若本地引擎**整体失败**（非单条规则异常，
+后者由 `LocalOptimizer._safe` 隔离），自动降级到 AI，并把 `engine_used` 更新为 AI 引擎名。
+
+### 17.7 测试清单的例外
+
+§16 把 `tests/` 现有测试文件列入"不改动清单"，但实施中**向既有测试文件追加了用例**
+（`test_models` / `test_coach` / `test_cli` / `test_settings_dialog` / `test_report_view` / `test_db_connector`）。
+既有用例本身未被修改，只做新增。分支起点 `master` 的测试基线为 **129** 个用例（非设计稿所称 134）。
+
+### 17.8 已知遗留项（非阻塞）
+
+- `gui/main_window.py` 的 `_check_db_connection` 在连库失败时弹**模态** `QMessageBox`，
+  这是改动前就存在的代码；无数据库环境下启动仍会被它阻塞（与本期的自检对话框无关）。
+- `installer.apply_auto_fixes` 用 `CheckResult.name.startswith("配置文件")` 做分支判断，
+  属字符串耦合（改展示名即静默失效），后续可改为机器可读的 key。
+- `copy_hint` 失败时 UI 无反馈；`check_runtime` 仅查 Python 版本（见 17.5）。
