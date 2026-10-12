@@ -272,6 +272,35 @@ sql-coach analyze "SELECT * FROM orders WHERE status='pending'"
 
 ---
 
+## 优化引擎分流
+
+SQL Coach 会自动判断 SQL 复杂度：
+
+- **简单 / 中等** → 本地规则引擎（毫秒级，不联网）
+- **复杂** → AI 大模型
+
+可在 `.env` 中控制：
+
+```ini
+OPTIMIZER_MODE=auto     # auto / local / ai
+COMPLEXITY_THRESHOLD=8  # 分数 >= 该值走 AI
+```
+
+也可在命令行临时指定：
+
+```bash
+sql-coach analyze --engine local "SELECT * FROM orders WHERE status='pending'"
+```
+
+## 环境自检
+
+```bash
+sql-coach doctor          # 检查 .env / MySQL / AI 配置 / 运行环境
+sql-coach doctor --fix    # 自动修复可安全修复的项（如生成 .env 模板）
+```
+
+---
+
 ## 6. 完整示例
 
 ### 6.1 基础示例

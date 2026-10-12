@@ -188,9 +188,9 @@ def test_complex_window_three_tables():
 
 
 def test_threshold_override():
-    info = make_info("SELECT a, COUNT(*) FROM t GROUP BY a",
-                     tables=["t"], columns=["a"])
-    # 单表(0) + 聚合/分组(2) = 2
+    # 单表(0) + 聚合/分组(2) = 2；带 WHERE 所以不叠加"无 WHERE"惩罚
+    info = make_info("SELECT a, COUNT(*) FROM t WHERE x=1 GROUP BY a",
+                     tables=["t"], columns=["a"], where=["x=1"])
     assert ComplexityScorer(threshold=1).score(info).level == "complex"
     assert ComplexityScorer(threshold=8).score(info).level == "simple"
 
@@ -199,6 +199,18 @@ def test_reasons_recorded():
     info = make_info("SELECT * FROM a JOIN b ON a.id=b.id", tables=["a", "b"])
     c = ComplexityScorer().score(info)
     assert any("2 张表" in r for r in c.reasons)
+
+
+def test_correlated_subquery_not_specially_penalized():
+    info = make_info(
+        "SELECT u.id FROM users u WHERE (SELECT COUNT(*) FROM orders o "
+        "WHERE o.user_id=u.id) > 3",
+        tables=["users", "orders"],
+        where=["(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) > 3"])
+    c = ComplexityScorer().score(info)
+    # 2 表(+2) + 1 个子查询(+3) + COUNT(*) 聚合函数(+2) = 7；无"相关子查询"专项加分
+    assert c.score == 7
+    assert all("相关子查询" not in r for r in c.reasons)
 ```
 
 - [ ] **Step 2: 运行确认失败**
@@ -221,17 +233,13 @@ from ..models import SQLInfo, Complexity
 DEFAULT_THRESHOLD = 8
 SIMPLE_MAX = 3
 
-_RESERVED = {
-    "where", "group", "order", "limit", "having", "on", "join", "inner",
-    "left", "right", "union", "set", "values", "as", "and", "or", "by",
-}
-
 
 class ComplexityScorer:
     """按 SQL 结构特征打分并划分等级。"""
 
     def __init__(self, threshold: int = DEFAULT_THRESHOLD):
-        self.threshold = threshold
+        # 阈值下界钳制：0/负数会让一切判为 complex
+        self.threshold = max(1, threshold)
 
     def score(self, sql_info: SQLInfo) -> Complexity:
         sql = sql_info.raw_sql or ""
@@ -251,11 +259,6 @@ class ComplexityScorer:
         if subqueries:
             s += 3 * subqueries
             reasons.append(f"{subqueries} 个子查询/派生表")
-
-        correlated = self._count_correlated(sql_info, sql)
-        if correlated:
-            s += 5 * correlated
-            reasons.append(f"{correlated} 个相关子查询")
 
         if re.search(r"\bWITH\b", upper):
             s += 3
@@ -285,31 +288,19 @@ class ComplexityScorer:
             s += 1
             reasons.append("多列排序")
 
-        if s <= SIMPLE_MAX:
+        if s <= min(SIMPLE_MAX, self.threshold):
             level = "simple"
         elif s <= self.threshold:
             level = "medium"
         else:
             level = "complex"
         return Complexity(level=level, score=s, reasons=reasons)
-
-    @staticmethod
-    def _count_correlated(sql_info: SQLInfo, sql: str) -> int:
-        aliases = {t.lower() for t in sql_info.tables}
-        for m in re.finditer(
-            r"\b(?:FROM|JOIN)\s+([A-Za-z_]\w*)(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?",
-            sql, re.IGNORECASE,
-        ):
-            alias = m.group(2)
-            if alias and alias.lower() not in _RESERVED:
-                aliases.add(alias.lower())
-        count = 0
-        for m in re.finditer(r"\(\s*SELECT\b([^()]*)\)", sql, re.IGNORECASE | re.DOTALL):
-            inner = m.group(1)
-            if any(re.search(rf"\b{re.escape(a)}\s*\.", inner, re.IGNORECASE) for a in aliases):
-                count += 1
-        return count
 ```
+
+> **关于相关子查询**：早期设计曾打算对相关子查询额外 +5，但纯正则启发式在
+> "子查询内部含函数/嵌套括号"时会漏判、在"子查询自带别名/派生表"时会误判（双向都错），
+> 会把简单查询误抬成 complex、把复杂查询漏判为 medium。因此**本期不做相关子查询识别**，
+> 仅保留"子查询/派生表 +3"这一稳健计数。
 
 - [ ] **Step 4: 运行确认通过**
 
@@ -350,16 +341,22 @@ class FakeConnector:
     def is_connected(self):
         return self.connected
 
-    def query(self, sql, params=()):
+    def query(self, sql, params=None):
         self.calls.append(sql)
+        wanted = {str(p).lower() for p in (params or ())}
         if "information_schema.COLUMNS" in sql:
-            return [("orders", "id", "bigint"),
+            rows = [("orders", "id", "bigint"),
                     ("orders", "status", "varchar"),
-                    ("orders", "created_at", "datetime")]
-        if "information_schema.STATISTICS" in sql:
-            return [("orders", "PRIMARY", 1, "id"),
-                    ("orders", "idx_status", 1, "status")]
-        return []
+                    ("orders", "created_at", "datetime"),
+                    ("users", "id", "bigint"),
+                    ("users", "phone", "varchar")]
+        elif "information_schema.STATISTICS" in sql:
+            rows = [("orders", "PRIMARY", 1, "id"),
+                    ("orders", "idx_status", 1, "status"),
+                    ("users", "PRIMARY", 1, "id")]
+        else:
+            rows = []
+        return [r for r in rows if r[0].lower() in wanted]
 
 
 def test_empty_schema_is_falsy():
@@ -375,6 +372,20 @@ def test_has_index_on_and_column_type():
     assert not s.has_index_on("orders", "missing")
     assert s.column_type("orders", "status") == "varchar"
     assert s.column_type("orders", "nope") is None
+
+
+def test_has_index_on_uses_leftmost_column_only():
+    # 复合索引 (a, b)：单独用 b 无法走该索引
+    s = Schema(tables={"t": TableSchema(name="t", indexes=[["a", "b"]])})
+    assert s.has_index_on("t", "a")
+    assert not s.has_index_on("t", "b")
+
+
+def test_has_table_distinguishes_unknown_table():
+    assert not Schema().has_table("orders")
+    s = Schema(tables={"orders": TableSchema(name="orders")})
+    assert s.has_table("orders")
+    assert not s.has_table("users")
 
 
 def test_provider_without_connector_returns_empty():
@@ -398,6 +409,22 @@ def test_provider_caches_after_first_load():
     assert len(fake.calls) == n  # 第二次不再查库
 
 
+def test_provider_accumulates_across_different_tables():
+    """复用 provider 时，第二次换表不能返回陈旧 schema。"""
+    sp = SchemaProvider(FakeConnector())
+    sp.load(["orders"])
+    schema = sp.load(["users"])
+    assert schema.has_table("orders")
+    assert schema.has_table("users")
+
+
+def test_provider_empty_tables_does_not_pollute_cache():
+    """tables 为空时不得把空结果写进缓存。"""
+    sp = SchemaProvider(FakeConnector())
+    sp.load([])
+    assert sp.load(["orders"]).has_table("orders")
+
+
 def test_provider_swallows_query_error():
     class Boom(FakeConnector):
         def query(self, sql, params=()):
@@ -416,9 +443,10 @@ Expected: FAIL（`ModuleNotFoundError`）
 在 `sql_coach/db/connector.py` 的 `execute` 方法之后新增（不改动任何现有方法）：
 
 ```python
-    def query(self, sql: str, params: tuple = ()) -> list[tuple]:
-        """执行只读查询并返回所有行。未连接时返回空列表。"""
+    def query(self, sql: str, params=None) -> list[tuple]:
+        """执行只读查询并返回所有行；未连接时记录警告并返回空列表。"""
         if not self.is_connected():
+            logger.warning("数据库未连接，query 返回空结果")
             return []
         with self._conn.cursor() as cursor:
             cursor.execute(sql, params)
@@ -428,8 +456,24 @@ Expected: FAIL（`ModuleNotFoundError`）
 在 `sql_coach/db/mock.py` 的 `execute` 之后新增：
 
 ```python
-    def query(self, sql: str, params: tuple = ()) -> list[tuple]:
+    def query(self, sql: str, params=None) -> list[tuple]:
+        """模拟连接器无真实数据，返回空列表。"""
         return []
+```
+
+追加到 `tests/test_db_connector.py`：
+
+```python
+def test_query_returns_empty_when_not_connected():
+    from sql_coach.db.connector import DBConnector
+    from sql_coach.models import DBConfig
+    conn = DBConnector(DBConfig("h", 3306, "u", "p", "d"))
+    assert conn.query("SELECT 1") == []
+
+
+def test_mock_connector_query_returns_empty():
+    from sql_coach.db.mock import MockConnector
+    assert MockConnector().query("SELECT 1") == []
 ```
 
 创建 `sql_coach/local/schema.py`：
@@ -454,12 +498,17 @@ class TableSchema:
 class Schema:
     tables: dict[str, TableSchema] = field(default_factory=dict)
 
+    def has_table(self, table: str) -> bool:
+        """该表是否已从数据库读到（用于区分"已校验"与"未校验"）。"""
+        return table.lower() in self.tables
+
     def has_index_on(self, table: str, column: str) -> bool:
+        """该列是否为某个索引的最左列（MySQL 最左前缀语义）。"""
         t = self.tables.get(table.lower())
         if t is None:
             return False
         col = column.lower()
-        return any(col in [c.lower() for c in idx] for idx in t.indexes)
+        return any(idx and idx[0].lower() == col for idx in t.indexes)
 
     def column_type(self, table: str, column: str) -> Optional[str]:
         t = self.tables.get(table.lower())
@@ -472,23 +521,41 @@ class Schema:
 
 
 class SchemaProvider:
-    """从 information_schema 读取表结构与索引，结果缓存一次。"""
+    """从 information_schema 读取表结构与索引，按表累积缓存。
+
+    注意：provider 会被 SQLCoach 复用（CLI 交互模式一次会话分析多条 SQL），
+    因此缓存必须按表维度累积，不能"第一次查了谁就一直返回谁"。
+    """
 
     def __init__(self, connector=None):
         self.connector = connector
-        self._cache: Optional[Schema] = None
+        self._tables: dict[str, TableSchema] = {}
+        self._attempted: set[str] = set()
 
     def load(self, tables: list[str]) -> Schema:
-        if self._cache is not None:
-            return self._cache
         if self.connector is None or not self._is_connected():
             return Schema()
-        try:
-            self._cache = self._read(tables)
-        except Exception as e:  # noqa: BLE001 - 降级不阻断
-            logger.warning("读取 schema 失败，降级为空 schema: %s", e)
-            return Schema()
-        return self._cache
+        wanted = [t for t in tables if t and t.lower() not in self._attempted]
+        if wanted:
+            try:
+                fetched = self._read(wanted)
+            except Exception as e:  # noqa: BLE001 - 降级不阻断
+                logger.warning("读取 schema 失败，降级为空 schema: %s", e)
+                return Schema(tables=dict(self._tables))
+            self._merge(fetched)
+            self._attempted.update(t.lower() for t in wanted)
+        return Schema(tables=dict(self._tables))
+
+    def _merge(self, schema: Schema) -> None:
+        for name, ts in schema.tables.items():
+            existing = self._tables.get(name)
+            if existing is None:
+                self._tables[name] = ts
+                continue
+            existing.columns.update(ts.columns)
+            for idx in ts.indexes:
+                if idx not in existing.indexes:
+                    existing.indexes.append(idx)
 
     def _is_connected(self) -> bool:
         checker = getattr(self.connector, "is_connected", None)
@@ -708,6 +775,9 @@ def test_deep_pagination_threshold():
     assert len(DeepPaginationRule().check(ctx)) == 1
     ctx_ok = _ctx("SELECT * FROM orders LIMIT 10, 20", tables=["orders"], columns=["*"])
     assert DeepPaginationRule().check(ctx_ok) == []
+    ctx_off = _ctx("SELECT * FROM orders LIMIT 20 OFFSET 100000",
+                   tables=["orders"], columns=["*"])
+    assert len(DeepPaginationRule().check(ctx_off)) == 1
 
 
 def test_or_condition():
@@ -751,7 +821,7 @@ class MissingIndexRule(Rule):
         table = self._table(ctx)
         if not table:
             return []
-        verified = bool(ctx.schema)
+        verified = ctx.schema.has_table(table)
         out = []
         for col in self._columns(ctx):
             desc = (f"WHERE 条件列 {col} 缺少索引" if verified
@@ -768,7 +838,10 @@ class MissingIndexRule(Rule):
                 for col in self._columns(ctx)]
 
     def _table(self, ctx: RuleContext):
-        return ctx.sql_info.tables[0] if ctx.sql_info.tables else ""
+        # 多表 JOIN 时无法判断条件列归属哪张表，保守跳过（避免 DDL 指错表）
+        if len(ctx.sql_info.tables) != 1:
+            return ""
+        return ctx.sql_info.tables[0]
 
     def _columns(self, ctx: RuleContext) -> list[str]:
         table = self._table(ctx)
@@ -784,7 +857,7 @@ class MissingIndexRule(Rule):
         return out
 
     @staticmethod
-    def _column(cond: str):
+    def _column(cond: str) -> "str | None":
         left = _OP_SPLIT.split(cond, maxsplit=1)[0].strip().strip("` ")
         if not _IDENT.match(left):
             return None
@@ -834,9 +907,11 @@ class ImplicitCastRule(Rule):
     risk = "safe"
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        if not ctx.schema or not ctx.sql_info.tables:
+        if not ctx.sql_info.tables:
             return []
         table = ctx.sql_info.tables[0]
+        if not ctx.schema.has_table(table):
+            return []
         out = []
         for cond in ctx.sql_info.where_conditions:
             m = _PAT.search(cond)
@@ -877,13 +952,14 @@ class NoLimitRule(Rule):
 `sql_coach/local/rules/deep_pagination.py`：
 
 ```python
-"""深分页规则：LIMIT offset,n 中 offset 过大。"""
+"""深分页规则：LIMIT offset,n 或 LIMIT n OFFSET offset 中 offset 过大。"""
 import re
 
 from ...models import Problem
 from .base import Rule, RuleContext
 
-_PAT = re.compile(r"\bLIMIT\s+(\d+)\s*,\s*(\d+)", re.IGNORECASE)
+_COMMA_PAT = re.compile(r"\bLIMIT\s+(\d+)\s*,\s*(\d+)", re.IGNORECASE)
+_OFFSET_PAT = re.compile(r"\bLIMIT\s+(\d+)\s+OFFSET\s+(\d+)", re.IGNORECASE)
 _OFFSET_THRESHOLD = 1000
 
 
@@ -892,12 +968,20 @@ class DeepPaginationRule(Rule):
     risk = "safe"  # 自动改写需主键信息，本期仅建议
 
     def check(self, ctx: RuleContext) -> list[Problem]:
-        m = _PAT.search(ctx.sql_info.raw_sql or "")
-        if not m or int(m.group(1)) < _OFFSET_THRESHOLD:
+        sql = ctx.sql_info.raw_sql or ""
+        offset = None
+        m = _COMMA_PAT.search(sql)
+        if m:
+            offset = int(m.group(1))
+        else:
+            m = _OFFSET_PAT.search(sql)
+            if m:
+                offset = int(m.group(2))
+        if offset is None or offset < _OFFSET_THRESHOLD:
             return []
         table = ctx.sql_info.tables[0] if ctx.sql_info.tables else ""
         return [Problem(severity="warning", table=table,
-                        description=f"深分页 LIMIT {m.group(1)}, {m.group(2)}，offset 越大越慢",
+                        description=f"深分页 offset={offset}，offset 越大越慢",
                         suggestion="改用基于主键/游标的续页，或延迟关联（先用覆盖索引取主键再 JOIN）")]
 ```
 
@@ -997,6 +1081,14 @@ def test_select_star_no_rewrite_without_schema():
     assert rule.rewrite(ctx) is None
 
 
+def test_select_star_no_rewrite_for_multitable():
+    """多表 JOIN 时展开第一张表的列会改变结果集语义，必须放弃改写。"""
+    schema = Schema(tables={"a": TableSchema(name="a", columns={"id": "bigint"})})
+    ctx = _ctx("SELECT * FROM a JOIN b ON a.id=b.id", tables=["a", "b"],
+               columns=["*"], schema=schema)
+    assert SelectStarRule().rewrite(ctx) is None
+
+
 def test_function_on_column_check_and_rewrite():
     sql = "SELECT id FROM orders WHERE DATE(created_at)='2026-01-01'"
     ctx = _ctx(sql, tables=["orders"], columns=["id"], where=["DATE(created_at)='2026-01-01'"])
@@ -1044,14 +1136,16 @@ class SelectStarRule(Rule):
 
     def rewrite(self, ctx: RuleContext) -> str | None:
         info = ctx.sql_info
-        if info.columns != ["*"] or not info.tables or not ctx.schema:
+        # 仅单表可安全展开：多表 JOIN 时 tables[0] 的列无法代表整个结果集
+        if info.columns != ["*"] or len(info.tables) != 1 or not ctx.schema:
             return None
         table = info.tables[0]
         ts = ctx.schema.tables.get(table.lower())
         if ts is None or not ts.columns:
             return None
         cols = ", ".join(ts.columns.keys())
-        return re.sub(r"(?i)\bSELECT\s+\*", f"SELECT {cols}", info.raw_sql, count=1)
+        new_sql = re.sub(r"(?i)\bSELECT\s+\*", f"SELECT {cols}", info.raw_sql, count=1)
+        return new_sql if new_sql != info.raw_sql else None
 ```
 
 `sql_coach/local/rules/function_on_column.py`：
@@ -1179,6 +1273,38 @@ def test_optimizer_no_hit_keeps_original_sql():
     result = LocalOptimizer(rules=[SelectStarRule()]).optimize(info, Schema())
     assert result.optimized_sql == "SELECT id FROM orders WHERE id=1"
     assert result.problems == []
+
+
+def test_optimizer_composes_rewrites():
+    """select_star 与 function_on_column 必须叠加，而不是后写覆盖前写。"""
+    schema = Schema(tables={"orders": TableSchema(
+        name="orders", columns={"id": "bigint", "created_at": "datetime"})})
+    info = make_info("SELECT * FROM orders WHERE DATE(created_at)='2026-01-01'",
+                     tables=["orders"], columns=["*"],
+                     where=["DATE(created_at)='2026-01-01'"])
+    result = LocalOptimizer().optimize(info, schema)
+    assert result.optimized_sql.startswith("SELECT id, created_at FROM orders")
+    assert "created_at >= '2026-01-01 00:00:00'" in result.optimized_sql
+
+
+def test_optimizer_isolates_rewrite_and_ddls_exceptions():
+    class BoomRewrite(Rule):
+        name = "boom_rewrite"
+
+        def rewrite(self, ctx):
+            raise RuntimeError("boom")
+
+    class BoomDdls(Rule):
+        name = "boom_ddls"
+
+        def ddls(self, ctx):
+            raise RuntimeError("boom")
+
+    info = make_info("SELECT * FROM orders", tables=["orders"], columns=["*"])
+    result = LocalOptimizer(
+        rules=[BoomRewrite(), BoomDdls(), SelectStarRule()]
+    ).optimize(info, Schema())
+    assert any("SELECT *" in p.description for p in result.problems)
 ```
 
 - [ ] **Step 2: 运行确认失败**
@@ -1193,6 +1319,7 @@ Expected: FAIL（`ModuleNotFoundError: ... engine`）
 ```python
 """本地规则引擎：汇总所有规则，产出与 AI 一致的 AnalysisResult。"""
 import logging
+from dataclasses import replace
 
 from ..models import SQLInfo, AnalysisResult
 from .schema import Schema
@@ -1233,8 +1360,11 @@ class LocalOptimizer:
                 problems.extend(found)
                 hit.append(rule.name)
             new_sql = self._safe(lambda: rule.rewrite(ctx), rule.name, "rewrite", None)
-            if new_sql:
+            if new_sql and new_sql != ctx.sql_info.raw_sql:
                 optimized = new_sql
+                # 用改写后的 SQL 重建上下文，让后续规则在同一份 SQL 上叠加，而不是互相覆盖
+                ctx = RuleContext(
+                    sql_info=replace(ctx.sql_info, raw_sql=new_sql), schema=schema)
                 if rule.name not in hit:
                     hit.append(rule.name)
             ddls.extend(self._safe(lambda: rule.ddls(ctx), rule.name, "ddls", []))
@@ -1243,7 +1373,7 @@ class LocalOptimizer:
             problems=problems,
             optimized_sql=optimized,
             index_ddls=ddls,
-            explanation=self._explain(hit, schema),
+            explanation=self._explain(hit, sql_info, schema),
         )
 
     @staticmethod
@@ -1255,10 +1385,12 @@ class LocalOptimizer:
             return default
 
     @staticmethod
-    def _explain(hit: list[str], schema: Schema) -> str:
+    def _explain(hit: list[str], sql_info: SQLInfo, schema: Schema) -> str:
         if not hit:
             return "本地规则引擎：未发现明显问题。"
-        note = "" if schema else "（未连接数据库，索引相关结论未校验）"
+        table = sql_info.tables[0] if sql_info.tables else ""
+        verified = bool(table) and schema.has_table(table)
+        note = "" if verified else "（未连接数据库，索引相关结论未校验）"
         return "本地规则引擎命中规则: " + ", ".join(hit) + note
 ```
 
@@ -2491,17 +2623,19 @@ class DiagnosticsDialog(QDialog):
         return format_results(self.results)
 ```
 
-修改 `gui/app.py`：在 `window = MainWindow(...)` 之前插入自检（跳过标记存在时不弹；仅当存在非 ok 项时弹）：
+修改 `gui/app.py`：在 `window = MainWindow(...)` 之前插入自检（跳过标记存在时不弹；仅当存在非 ok 项时弹）。
+**用非模态 `show()` 而不是 `exec()`**，并把对话框挂在 `app` 上保持引用——否则在无 MySQL/无 Key 的环境（如 CI）会因嵌套事件循环阻塞启动。
 
 ```python
-    from pathlib import Path
     from sql_coach.diagnostics.checks import run_all
     from gui.widgets.diagnostics_dialog import DiagnosticsDialog, SKIP_MARKER
 
     if not SKIP_MARKER.exists():
         results = run_all(config, env_path)
         if any(r.status != "ok" for r in results):
-            DiagnosticsDialog(results, env_path=env_path, config=config).exec()
+            dialog = DiagnosticsDialog(results, env_path=env_path, config=config)
+            app._diagnostics_dialog = dialog  # 保持引用，防止被 GC
+            dialog.show()                     # 非模态，不阻塞启动
 ```
 
 并在 `tests/test_diagnostics_dialog.py` 追加：

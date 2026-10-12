@@ -42,6 +42,9 @@ def analyze_one(coach: SQLCoach, sql: str) -> None:
         report.analysis, report.benchmark
     ))
 
+    level = report.complexity.level if report.complexity else "-"
+    console.print(f"[dim]优化引擎: {report.engine_used} | 复杂度: {level}[/dim]")
+
     # 摘要
     console.print("\n[bold]摘要[/bold]")
     console.print(f"  优化后 SQL: [green]{report.analysis.optimized_sql}[/green]")

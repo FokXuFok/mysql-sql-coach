@@ -95,3 +95,35 @@ def test_get_config_dict(tmp_path, app, monkeypatch):
     assert config["DB_PORT"] == "3306"
     assert config["AI_MODEL"] == "ollama"
     assert config["OLLAMA_URL"] == "http://localhost:11434"
+
+
+def test_save_preserves_unknown_keys_and_comments(tmp_path):
+    """保存时不应丢弃模板里的其他键与注释。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "# 注释行\nDB_HOST=localhost\nDEEPSEEK_BASE_URL=https://api.deepseek.com\n"
+        "DEEPSEEK_MODEL=deepseek-chat\nLOG_LEVEL=INFO\n", encoding="utf-8")
+    from PySide6.QtWidgets import QApplication
+    from gui.widgets.settings_dialog import SettingsDialog
+    app = QApplication.instance() or QApplication([])
+    dlg = SettingsDialog(env_path=str(env_path))
+    dlg.host_edit.setText("127.0.0.1")
+    dlg._save_to_env()
+    text = env_path.read_text(encoding="utf-8")
+    assert "# 注释行" in text
+    assert "DEEPSEEK_BASE_URL=https://api.deepseek.com" in text
+    assert "LOG_LEVEL=INFO" in text
+    assert "DB_HOST=127.0.0.1" in text
+
+
+def test_save_writes_optimizer_fields(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text("DB_HOST=localhost\n", encoding="utf-8")
+    from PySide6.QtWidgets import QApplication
+    from gui.widgets.settings_dialog import SettingsDialog
+    app = QApplication.instance() or QApplication([])
+    dlg = SettingsDialog(env_path=str(env_path))
+    dlg._save_to_env()
+    text = env_path.read_text(encoding="utf-8")
+    assert "OPTIMIZER_MODE=" in text
+    assert "COMPLEXITY_THRESHOLD=" in text

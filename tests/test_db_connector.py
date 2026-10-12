@@ -159,3 +159,15 @@ def test_mock_connector_close_no_error():
 def test_mock_connector_execute_no_error():
     conn = MockConnector()
     conn.execute("CREATE INDEX idx ON t(c)")  # should not raise
+
+
+def test_query_returns_empty_when_not_connected():
+    from sql_coach.db.connector import DBConnector
+    from sql_coach.models import DBConfig
+    conn = DBConnector(DBConfig("h", 3306, "u", "p", "d"))
+    assert conn.query("SELECT 1") == []
+
+
+def test_mock_connector_query_returns_empty():
+    from sql_coach.db.mock import MockConnector
+    assert MockConnector().query("SELECT 1") == []

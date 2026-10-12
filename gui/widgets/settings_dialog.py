@@ -11,7 +11,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QRadioButton, QVBoxLayout, QWidget,
 )
 
@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (
 _ENV_KEYS = [
     "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
     "AI_MODEL", "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
-    "OLLAMA_URL", "BENCHMARK_RUNS",
+    "OLLAMA_URL", "OPTIMIZER_MODE", "COMPLEXITY_THRESHOLD",
+    "BENCHMARK_RUNS",
 ]
 
 
@@ -115,6 +116,11 @@ class SettingsDialog(QDialog):
         # --- 通用 ---
         common_group = QGroupBox("通用")
         common_form = QFormLayout(common_group)
+        self.optimizer_mode_combo = QComboBox()
+        self.optimizer_mode_combo.addItems(["auto", "local", "ai"])
+        common_form.addRow("优化器分流:", self.optimizer_mode_combo)
+        self.threshold_edit = QLineEdit()
+        common_form.addRow("复杂度阈值:", self.threshold_edit)
         self.benchmark_runs_edit = QLineEdit()
         common_form.addRow("Benchmark 次数:", self.benchmark_runs_edit)
         layout.addWidget(common_group)
@@ -149,6 +155,11 @@ class SettingsDialog(QDialog):
         self.openai_api_key_edit.setText(_get_env("OPENAI_API_KEY", ""))
         self.ollama_url_edit.setText(_get_env("OLLAMA_URL", "http://localhost:11434"))
         self.benchmark_runs_edit.setText(_get_env("BENCHMARK_RUNS", "3"))
+
+        mode = _get_env("OPTIMIZER_MODE", "auto").lower()
+        idx = self.optimizer_mode_combo.findText(mode)
+        self.optimizer_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.threshold_edit.setText(_get_env("COMPLEXITY_THRESHOLD", "8"))
 
         model = _get_env("AI_MODEL", "deepseek").lower()
         if model == "openai":
@@ -202,19 +213,38 @@ class SettingsDialog(QDialog):
             "DEEPSEEK_API_KEY": self.deepseek_api_key_edit.text(),
             "OPENAI_API_KEY": self.openai_api_key_edit.text(),
             "OLLAMA_URL": self.ollama_url_edit.text(),
+            "OPTIMIZER_MODE": self.optimizer_mode_combo.currentText(),
+            "COMPLEXITY_THRESHOLD": self.threshold_edit.text() or "8",
             "BENCHMARK_RUNS": self.benchmark_runs_edit.text(),
         }
 
     def _save_to_env(self) -> None:
-        """把表单字段写回 .env 文件。"""
+        """就地更新 .env：只覆盖已知键，保留注释与其他键。"""
         config = self.get_config_dict()
-        lines = []
+        existing_lines: list[str] = []
+        if os.path.exists(self.env_path):
+            with open(self.env_path, "r", encoding="utf-8") as f:
+                existing_lines = f.read().splitlines()
+
+        written: set[str] = set()
+        out: list[str] = []
+        for line in existing_lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                out.append(line)
+                continue
+            key = stripped.split("=", 1)[0].strip()
+            if key in config:
+                out.append(f"{key}={config[key]}")
+                written.add(key)
+            else:
+                out.append(line)
         for key in _ENV_KEYS:
-            value = config.get(key, "")
-            lines.append(f"{key}={value}")
-        # 写入时保留之前注释行 (这里简化: 全量重写)
+            if key not in written and key in config:
+                out.append(f"{key}={config[key]}")
+
         with open(self.env_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
+            f.write("\n".join(out) + "\n")
 
     # ---- 事件处理 ----
     def _on_test_connection(self) -> None:

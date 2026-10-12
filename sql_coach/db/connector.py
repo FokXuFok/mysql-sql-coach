@@ -76,6 +76,15 @@ class DBConnector:
             cursor.execute(sql)
         self._conn.commit()
 
+    def query(self, sql: str, params=None) -> list[tuple]:
+        """执行只读查询并返回所有行；未连接时记录警告并返回空列表。"""
+        if not self.is_connected():
+            logger.warning("数据库未连接，query 返回空结果")
+            return []
+        with self._conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+
     def close(self) -> None:
         """Close the connection."""
         if self._conn:

@@ -36,3 +36,9 @@ debug.log
 
 # 已放弃 splash 功能, 不提交图片
 splash.png
+
+# 依赖 wheel 缓存 (PySide6 等大包续传下载用, 勿入库)
+.wheels/
+
+# WorkBuddy 项目数据
+.workbuddy-ai/

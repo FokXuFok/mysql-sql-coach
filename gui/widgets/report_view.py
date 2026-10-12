@@ -150,10 +150,26 @@ class ReportView(QScrollArea):
         layout.addWidget(chart)
         return frame
 
+    def _engine_badge(self, report) -> QLabel:
+        """引擎 / 复杂度徽章。"""
+        engine = "本地规则" if report.engine_used == "local" else report.engine_used
+        level = "-"
+        if report.complexity is not None:
+            level = {"simple": "简单", "medium": "中等", "complex": "复杂"}.get(
+                report.complexity.level, report.complexity.level)
+            level = f"{level} ({report.complexity.score})"
+        label = QLabel(f"优化引擎：{engine}    复杂度：{level}")
+        label.setStyleSheet(
+            "color: #1e66f5; font-weight: bold; padding: 4px 0;")
+        return label
+
     # ---- 公共 API ----
     def set_report(self, report: Report) -> None:
         """渲染完整报告。"""
         self._clear_layout()
+
+        # 引擎 / 复杂度徽章
+        self._layout.addWidget(self._engine_badge(report))
 
         # 原始 SQL
         self._layout.addWidget(self._section_label("📝 原始 SQL"))

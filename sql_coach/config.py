@@ -4,6 +4,39 @@ from typing import Optional
 
 from .models import Config, DBConfig
 
+ENV_TEMPLATE = """# MySQL 连接
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_password
+DB_NAME=test
+
+# AI 模型: deepseek / openai / ollama
+AI_MODEL=deepseek
+
+# DeepSeek
+DEEPSEEK_API_KEY=sk-xxx
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+
+# OpenAI
+OPENAI_API_KEY=sk-xxx
+OPENAI_BASE_URL=https://api.openai.com/v1
+
+# Ollama
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:14b
+
+# 优化器分流: auto / local / ai
+OPTIMIZER_MODE=auto
+# 复杂度阈值（>= 该值走 AI）
+COMPLEXITY_THRESHOLD=8
+
+# 通用
+BENCHMARK_RUNS=3
+LOG_LEVEL=INFO
+"""
+
 
 def _get_env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
