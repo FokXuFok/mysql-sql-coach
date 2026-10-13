@@ -8,8 +8,8 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QMainWindow, QMessageBox, QSplitter,
-    QStatusBar, QToolBar, QWidget,
+    QComboBox, QFileDialog, QMainWindow, QMessageBox, QSplitter,
+    QStackedWidget, QStatusBar, QToolBar, QVBoxLayout, QWidget,
 )
 
 from sql_coach.coach import Report
@@ -19,10 +19,18 @@ from sql_coach.models import Config
 from gui.storage.history_store import HistoryStore
 from gui.storage.exporter import Exporter
 from gui.widgets.history_dialog import HistoryDialog
+from gui.widgets.nl_input_widget import NlInputWidget
+from gui.widgets.query_result_widget import QueryResultWidget
 from gui.widgets.report_view import ReportView
 from gui.widgets.settings_dialog import SettingsDialog
+from gui.widgets.sql_display_widget import SqlDisplayWidget
 from gui.widgets.sql_input import SqlInputWidget
 from gui.workers.analyze_worker import AnalyzeWorker, stage_label
+from gui.workers.nl_worker import NlWorker
+
+# 模式下拉的顺序即 QStackedWidget 的索引
+MODE_OPTIMIZE = 0
+MODE_NL = 1
 
 
 class MainWindow(QMainWindow):
@@ -39,6 +47,7 @@ class MainWindow(QMainWindow):
         self.history = HistoryStore()
         self.exporter = Exporter()
         self.worker: Optional[AnalyzeWorker] = None
+        self.nl_worker: Optional[NlWorker] = None
         self.last_report: Optional[Report] = None
         self._analyze_start_time: float = 0.0
 
@@ -55,14 +64,38 @@ class MainWindow(QMainWindow):
 
     # ---- UI 构建 ----
     def _build_ui(self) -> None:
-        """左右分栏 40% / 60%。"""
+        """左右分栏 40% / 60%; 每侧用 QStackedWidget 承载两种模式。"""
         splitter = QSplitter(Qt.Horizontal)
 
+        # 左侧: 优化模式(SQL 输入) / NL 模式(自然语言输入)
         self.sql_input = SqlInputWidget()
-        self.report_view = ReportView()
+        self.nl_input = NlInputWidget()
+        self.left_stack = QStackedWidget()
+        self.left_stack.addWidget(self.sql_input)  # 索引 0
+        self.left_stack.addWidget(self.nl_input)   # 索引 1
 
-        splitter.addWidget(self.sql_input)
-        splitter.addWidget(self.report_view)
+        # 右侧: 优化模式(报告) / NL 模式(SQL 展示 + 结果表格)
+        self.report_view = ReportView()
+        self.sql_display = SqlDisplayWidget()
+        self.query_result = QueryResultWidget()
+        self.nl_container = QWidget()
+        nl_layout = QVBoxLayout(self.nl_container)
+        nl_layout.setContentsMargins(0, 0, 0, 0)
+        nl_layout.setSpacing(0)
+        nl_splitter = QSplitter(Qt.Vertical)
+        nl_splitter.addWidget(self.sql_display)
+        nl_splitter.addWidget(self.query_result)
+        nl_splitter.setStretchFactor(0, 4)
+        nl_splitter.setStretchFactor(1, 6)
+        nl_splitter.setSizes([320, 480])
+        nl_layout.addWidget(nl_splitter)
+
+        self.right_stack = QStackedWidget()
+        self.right_stack.addWidget(self.report_view)   # 索引 0
+        self.right_stack.addWidget(self.nl_container)  # 索引 1
+
+        splitter.addWidget(self.left_stack)
+        splitter.addWidget(self.right_stack)
         splitter.setStretchFactor(0, 4)  # 40%
         splitter.setStretchFactor(1, 6)  # 60%
         splitter.setSizes([480, 720])
@@ -99,10 +132,16 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def _build_toolbar(self) -> None:
-        """工具栏: 5 个按钮。"""
+        """工具栏: 模式下拉 + 5 个按钮。"""
         toolbar = QToolBar("主工具栏")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
+
+        # 模式切换放在最左侧
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["优化模式", "自然语言模式"])
+        toolbar.addWidget(self.mode_combo)
+        toolbar.addSeparator()
 
         analyze_btn = toolbar.addAction("🔍 分析")
         analyze_btn.triggered.connect(self._on_analyze)
@@ -113,6 +152,7 @@ class MainWindow(QMainWindow):
 
         export_btn = toolbar.addAction("💾 导出报告")
         export_btn.triggered.connect(self._on_export)
+        self._export_action = export_btn
 
         history_btn = toolbar.addAction("🕘 历史")
         history_btn.triggered.connect(self._on_history)
@@ -129,6 +169,9 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         """连接信号槽 + 快捷键。"""
         self.sql_input.analyze_requested.connect(self._start_analyze)
+        self.nl_input.generate_requested.connect(self._start_nl_generate)
+        self.sql_display.optimize_requested.connect(self._on_optimize_requested)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         # Ctrl+L 清空
         clear_sc = QShortcut(QKeySequence("Ctrl+L"), self)
         clear_sc.activated.connect(self._on_clear)
@@ -246,11 +289,76 @@ class MainWindow(QMainWindow):
         self._show_message("分析失败", msg, QMessageBox.Critical)
         self.status_bar.showMessage("分析失败")
 
+    # ---- 模式切换 (优化 / 自然语言) ----
+    def _on_mode_changed(self, index: int) -> None:
+        """切换左右 stack 并更新工具栏按钮可用状态。"""
+        self.left_stack.setCurrentIndex(index)
+        self.right_stack.setCurrentIndex(index)
+        is_optimize = index == MODE_OPTIMIZE
+        # NL 模式下优化相关按钮不可用; 优化模式下 "✨ 生成 SQL" 由组件自身管理
+        self._analyze_action.setEnabled(is_optimize)
+        self._export_action.setEnabled(is_optimize)
+        mode_name = "优化模式" if is_optimize else "自然语言模式"
+        self.status_bar.showMessage(f"已切换到{mode_name}")
+
+    def _start_nl_generate(self, text: str) -> None:
+        """启动 NL→SQL 后台线程。"""
+        if self.nl_worker is not None:
+            return  # 正在生成, 忽略
+        self.nl_input.set_readonly(True)
+        self.status_bar.showMessage("生成 SQL 中 ...")
+
+        self.nl_worker = NlWorker(text=text, config=self.config)
+        self.nl_worker.nl_done.connect(self._on_nl_finished)
+        self.nl_worker.error.connect(self._on_nl_error)
+        # QThread 内置 finished 总会发射 -> 兜底, 保证 UI 一定回到可交互状态
+        self.nl_worker.finished.connect(self._reset_nl_ui)
+        self.nl_worker.nl_done.connect(self.nl_worker.deleteLater)
+        self.nl_worker.error.connect(self.nl_worker.deleteLater)
+        self.nl_worker.start()
+
+    def _reset_nl_ui(self) -> None:
+        """恢复 NL 输入 UI。幂等, 可被多个信号调用。"""
+        self.nl_input.set_readonly(False)
+        self.nl_worker = None
+
+    def _on_nl_finished(self, result) -> None:
+        """生成完成: 渲染 SQL 与结果, 提示 warnings / error。"""
+        self.sql_display.set_sql(result.generated_sql)
+        self.query_result.set_result(result.columns, result.rows)
+        self._reset_nl_ui()
+
+        if result.error:
+            self._show_message("查询执行失败", result.error, QMessageBox.Critical)
+        if result.warnings:
+            self._show_message(
+                "生成提示", "\n".join(result.warnings), QMessageBox.Warning)
+
+        if result.error:
+            self.status_bar.showMessage("生成完成, 但执行失败")
+        else:
+            self.status_bar.showMessage(f"完成 | 结果 {len(result.rows)} 行")
+
+    def _on_nl_error(self, msg: str) -> None:
+        """生成出错: 非模态提示 + 恢复 UI。"""
+        self._reset_nl_ui()
+        self._show_message("生成失败", msg, QMessageBox.Critical)
+        self.status_bar.showMessage("生成失败")
+
+    def _on_optimize_requested(self, sql: str) -> None:
+        """送入优化模式: SQL 填入输入框并切回优化模式。"""
+        self.sql_input.editor.setPlainText(sql)
+        self.mode_combo.setCurrentIndex(MODE_OPTIMIZE)
+        self.status_bar.showMessage("已送入优化模式")
+
     # ---- 其他功能 ----
     def _on_clear(self) -> None:
-        """清空输入框和报告区。"""
+        """清空输入框和报告区 (两种模式一起清)。"""
         self.sql_input.clear()
         self.report_view.clear()
+        self.nl_input.clear()
+        self.sql_display.clear()
+        self.query_result.clear()
         self.last_report = None
         self.status_bar.showMessage("已清空")
 

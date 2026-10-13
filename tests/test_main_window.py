@@ -154,3 +154,166 @@ def test_analyze_error_does_not_block_ui(app, monkeypatch):
     assert box.windowModality() == Qt.NonModal, "提示框必须是非模态，否则会卡住主窗口"
     assert QApplication.activeModalWidget() is None
     box.close()
+
+
+# ---------------- Task 15: 模式切换与 NL 流程 ----------------
+
+def make_nl_result(warnings=None, error=""):
+    """构造一个最小 NLQueryResult。"""
+    from sql_coach.models import NLQuery, NLQueryResult
+    return NLQueryResult(
+        nl_query=NLQuery(
+            intent="select", tables=["orders"], columns=["id"],
+            conditions=[], aggregates=[], order_by=[], group_by=[],
+            limit=10, raw_text="查询10条订单",
+        ),
+        generated_sql="SELECT id FROM orders LIMIT 10;",
+        columns=["id"],
+        rows=[(1,), (2,)],
+        warnings=warnings or [],
+        executed=True,
+        error=error,
+    )
+
+
+def test_default_mode_is_optimize(app):
+    """默认进入优化模式, 左侧显示 sql_input。"""
+    win = MainWindow(config=make_config())
+    assert win.mode_combo.currentText() == "优化模式"
+    assert win.left_stack.currentWidget() is win.sql_input
+    assert win.right_stack.currentWidget() is win.report_view
+    assert win._analyze_action.isEnabled() is True
+
+
+def test_switch_to_nl_mode_disables_optimize_actions(app):
+    """切到 NL 模式: nl_input 可见, 分析/导出按钮禁用。"""
+    win = MainWindow(config=make_config())
+    win.mode_combo.setCurrentIndex(1)
+    assert win.mode_combo.currentText() == "自然语言模式"
+    assert win.left_stack.currentWidget() is win.nl_input
+    assert win.right_stack.currentWidget() is win.nl_container
+    assert win._analyze_action.isEnabled() is False
+    assert win._export_action.isEnabled() is False
+
+
+def test_switch_back_to_optimize_enables_actions(app):
+    """切回优化模式恢复按钮。"""
+    win = MainWindow(config=make_config())
+    win.mode_combo.setCurrentIndex(1)
+    win.mode_combo.setCurrentIndex(0)
+    assert win.left_stack.currentWidget() is win.sql_input
+    assert win.right_stack.currentWidget() is win.report_view
+    assert win._analyze_action.isEnabled() is True
+    assert win._export_action.isEnabled() is True
+
+
+def test_optimize_requested_fills_sql_input_and_switches_mode(app):
+    """送入优化模式: SQL 填入 sql_input 并切回优化模式。"""
+    win = MainWindow(config=make_config())
+    win.mode_combo.setCurrentIndex(1)
+    win.sql_display.optimize_requested.emit("SELECT 42;")
+    assert win.sql_input.editor.toPlainText() == "SELECT 42;"
+    assert win.mode_combo.currentIndex() == 0
+    assert win.left_stack.currentWidget() is win.sql_input
+
+
+def test_nl_generate_renders_result(app, monkeypatch):
+    """NL 模式端到端: 生成 SQL 后渲染 SQL 与结果表格。"""
+    import time
+    from unittest.mock import MagicMock
+    from gui.workers import nl_worker as nw_mod
+
+    fake_coach = MagicMock()
+    fake_coach.connect.return_value = True
+    fake_coach.generate_sql.return_value = make_nl_result()
+    monkeypatch.setattr(nw_mod, "SQLCoach", lambda *a, **k: fake_coach)
+
+    win = MainWindow(config=make_config())
+    win.mode_combo.setCurrentIndex(1)
+    win.nl_input.editor.setPlainText("查询10条订单")
+    win.nl_input.generate_button.click()
+
+    for _ in range(100):
+        QApplication.processEvents()
+        if win.nl_worker is None:
+            break
+        time.sleep(0.05)
+
+    assert win.nl_worker is None
+    assert win.nl_input.editor.isReadOnly() is False
+    assert win.sql_display.get_sql() == "SELECT id FROM orders LIMIT 10;"
+    assert win.query_result.table.rowCount() == 2
+
+
+def test_nl_warnings_shown_non_modal(app, monkeypatch):
+    """warnings 用非模态提示展示, 不得走模态路径。"""
+    import time
+    from unittest.mock import MagicMock
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QMessageBox
+    from gui.workers import nl_worker as nw_mod
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("NL 提示走了模态路径")
+
+    monkeypatch.setattr(QMessageBox, "critical", _boom)
+    monkeypatch.setattr(QMessageBox, "exec", _boom)
+
+    fake_coach = MagicMock()
+    fake_coach.connect.return_value = True
+    fake_coach.generate_sql.return_value = make_nl_result(warnings=["未识别表名"])
+    monkeypatch.setattr(nw_mod, "SQLCoach", lambda *a, **k: fake_coach)
+
+    win = MainWindow(config=make_config())
+    win.mode_combo.setCurrentIndex(1)
+    win.nl_input.editor.setPlainText("查询10条订单")
+    win.nl_input.generate_button.click()
+
+    for _ in range(100):
+        QApplication.processEvents()
+        if win.nl_worker is None:
+            break
+        time.sleep(0.05)
+
+    box = win._message_box
+    assert box is not None
+    assert "未识别表名" in box.text()
+    assert box.windowModality() == Qt.NonModal
+    box.close()
+
+
+def test_nl_error_restores_ui(app, monkeypatch):
+    """NL 生成失败: 非模态提示 + UI 幂等恢复。"""
+    import time
+    from unittest.mock import MagicMock
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QMessageBox
+    from gui.workers import nl_worker as nw_mod
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("NL 失败时走了模态路径")
+
+    monkeypatch.setattr(QMessageBox, "critical", _boom)
+    monkeypatch.setattr(QMessageBox, "exec", _boom)
+
+    fake_coach = MagicMock()
+    fake_coach.connect.return_value = True
+    fake_coach.generate_sql.side_effect = RuntimeError("模拟失败")
+    monkeypatch.setattr(nw_mod, "SQLCoach", lambda *a, **k: fake_coach)
+
+    win = MainWindow(config=make_config())
+    win.mode_combo.setCurrentIndex(1)
+    win._start_nl_generate("查询10条订单")
+
+    for _ in range(100):
+        QApplication.processEvents()
+        if win.nl_worker is None:
+            break
+        time.sleep(0.05)
+
+    assert win.nl_worker is None
+    assert win.nl_input.editor.isReadOnly() is False
+    box = win._message_box
+    assert box is not None
+    assert box.windowModality() == Qt.NonModal
+    box.close()
