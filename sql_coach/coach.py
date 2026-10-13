@@ -201,7 +201,7 @@ class SQLCoach:
             schema = Schema()
 
         # 2. 解析自然语言 → 3. 生成 SQL
-        nl_query = NLParser(schema).parse(text)
+        nl_query = NLParser(schema, value_probe=self._make_value_probe()).parse(text)
         sql = SQLBuilder().build(nl_query)
 
         # 4. 校验（可选）：仅取 problems 的描述作为 warnings，不使用 optimized_sql
@@ -216,7 +216,20 @@ class SQLCoach:
             warnings.append(
                 "未能识别表名，已使用 unknown_table 占位，请补充表名或检查数据库 schema。")
 
-        # 6. 执行查询（可选）
+        # 6. 被跳过的聚合：明确告知哪个关键词/表无法聚合（而非静默降级）
+        for keyword in nl_query.skipped_aggregates:
+            table = nl_query.tables[0] if nl_query.tables else "目标表"
+            warnings.append(
+                f"未识别到可聚合的列（关键词：{keyword}），已忽略该聚合。"
+                f"请确认表 {table} 是否存在对应列。")
+
+        # 7. 出现表名/列名识别歧义时，列出当前库可用表名作提示
+        if (not nl_query.tables or nl_query.skipped_aggregates) and schema:
+            hint = self._available_tables_hint(schema)
+            if hint:
+                warnings.append(hint)
+
+        # 8. 执行查询（可选）
         columns: list[str] = []
         rows: list[tuple] = []
         executed = False
@@ -238,3 +251,30 @@ class SQLCoach:
             executed=executed,
             error=error,
         )
+
+    def _make_value_probe(self):
+        """构造值探测回调：某值是否存在于某表的某列（参数化查询，防注入）。
+
+        未连库或 mock 模式返回 None（解析器随即跳过值探测）。
+        """
+        if self.config.mock or not self.db.is_connected():
+            return None
+
+        def probe(table: str, column: str, value: str) -> bool:
+            try:
+                rows = self.db.query(
+                    f"SELECT 1 FROM `{table}` WHERE `{column}` = %s LIMIT 1", (value,))
+                return bool(rows)
+            except Exception:  # noqa: BLE001 - 探测失败一律按未命中处理
+                return False
+
+        return probe
+
+    @staticmethod
+    def _available_tables_hint(schema: Schema, limit: int = 10) -> str:
+        """列出当前库可用表名（最多 limit 个），供识别失败时提示用户。"""
+        names = list(schema.tables.keys())[:limit]
+        if not names:
+            return ""
+        return ("当前库可用的表：" + "、".join(names)
+                + "。示例：查询每个城市的用户数量。")

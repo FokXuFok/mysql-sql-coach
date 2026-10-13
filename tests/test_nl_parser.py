@@ -125,3 +125,58 @@ def test_parse_quoted_literal_condition(parser):
     """Important 5：带引号字面量保留完整内容（内部引号由 mapper 转义）。"""
     result = parser.parse("查找name为'O'Brien'的用户")
     assert [c.mapped for c in result.conditions] == ["name = 'O'Brien'"]
+
+
+# --------------------------------------------------------- RC1~RC5 语义缺陷修复
+
+def real_schema() -> Schema:
+    """模拟真实 test 库：无 customers 表，users 无 age/amount 列。"""
+    return Schema(tables={
+        "orders": TableSchema(name="orders", columns={
+            "id": "bigint", "user_id": "bigint", "amount": "decimal",
+            "status": "varchar", "created_at": "datetime"}),
+        "products": TableSchema(name="products", columns={
+            "id": "bigint", "name": "varchar", "price": "decimal",
+            "category": "varchar", "created_at": "datetime"}),
+        "users": TableSchema(name="users", columns={
+            "id": "bigint", "name": "varchar", "email": "varchar",
+            "city": "varchar", "created_at": "datetime"}),
+    })
+
+
+@pytest.fixture(scope="module")
+def real_parser() -> NLParser:
+    return NLParser(real_schema())
+
+
+def test_rc1_customer_resolves_to_users(real_parser):
+    """RC1：真实库无 customers，客户应解析到 users，且 amount 聚合被跳过。"""
+    result = real_parser.parse("查询销售额最高的10个客户")
+    assert result.tables == ["users"]
+    assert result.skipped_aggregates == ["销售额"]
+
+
+def test_rc3_average_age_on_missing_column(real_parser):
+    """RC3：users 无 age 列时聚合被跳过并留痕。"""
+    result = real_parser.parse("用户的平均年龄")
+    assert result.tables == ["users"]
+    assert result.aggregates == []
+    assert result.skipped_aggregates
+
+
+def test_rc4_group_by_category(real_parser):
+    result = real_parser.parse("查询每个分类的商品数量")
+    assert result.group_by == ["category"]
+    assert [a.mapped for a in result.aggregates] == ["COUNT(*)"]
+
+
+def test_rc5_top1_limit(real_parser):
+    result = real_parser.parse("查询价格最高的商品")
+    assert result.limit == 1
+
+
+def test_rc2_value_probe_via_parser():
+    """RC2：NLParser 透传 value_probe。"""
+    probe = lambda t, c, v: t == "users" and c == "city" and v == "北京"  # noqa: E731
+    result = NLParser(real_schema(), value_probe=probe).parse("查询北京的用户")
+    assert [c.mapped for c in result.conditions] == ["city = '北京'"]

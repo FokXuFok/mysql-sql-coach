@@ -293,3 +293,73 @@ def test_example_wan_unit_in_where(builder, parser):
     sql = builder.build(parser.parse("查询销售额超过1万的客户"))
     assert "10000" in sql
     _assert_parses(sql)
+
+
+# --------------------------------------------------------- RC1~RC5 语义缺陷修复
+
+def real_schema() -> Schema:
+    """模拟真实 test 库：无 customers 表，users 无 age/amount 列。"""
+    return Schema(tables={
+        "orders": TableSchema(name="orders", columns={
+            "id": "bigint", "user_id": "bigint", "amount": "decimal",
+            "status": "varchar", "created_at": "datetime"}),
+        "products": TableSchema(name="products", columns={
+            "id": "bigint", "name": "varchar", "price": "decimal",
+            "category": "varchar", "created_at": "datetime"}),
+        "users": TableSchema(name="users", columns={
+            "id": "bigint", "name": "varchar", "email": "varchar",
+            "city": "varchar", "created_at": "datetime"}),
+    })
+
+
+@pytest.fixture(scope="module")
+def real_parser() -> NLParser:
+    return NLParser(real_schema())
+
+
+def test_rc1_never_emits_unknown_table(builder, real_parser):
+    """RC1：真实库下 '查询销售额最高的10个客户' 不得出现 unknown_table。"""
+    sql = builder.build(real_parser.parse("查询销售额最高的10个客户"))
+    assert "unknown_table" not in sql
+    assert sql == "SELECT * FROM users LIMIT 10;"
+    _assert_parses(sql)
+
+
+def test_rc2_implicit_city_condition(builder):
+    """RC2：'查询北京的用户' 生成 WHERE city = '北京'。"""
+    schema = real_schema()
+    probe = lambda t, c, v: t == "users" and c == "city" and v == "北京"  # noqa: E731
+    parser = NLParser(schema, value_probe=probe)
+    sql = builder.build(parser.parse("查询北京的用户"))
+    assert sql == "SELECT * FROM users WHERE city = '北京';"
+    _assert_parses(sql)
+
+
+def test_rc4_group_by_category_count_star(builder, real_parser):
+    """RC4：'查询每个分类的商品数量' → category 分组 + COUNT(*)。"""
+    sql = builder.build(real_parser.parse("查询每个分类的商品数量"))
+    assert sql == "SELECT category, COUNT(*) FROM products GROUP BY category;"
+    _assert_parses(sql)
+
+
+def test_rc5_top1_product(builder, real_parser):
+    """RC5：'查询价格最高的商品' → SELECT * ... ORDER BY price DESC LIMIT 1。"""
+    sql = builder.build(real_parser.parse("查询价格最高的商品"))
+    assert sql == "SELECT * FROM products ORDER BY price DESC LIMIT 1;"
+    _assert_parses(sql)
+
+
+def test_rc5_aggregate_without_aggregates_has_no_group_by(builder):
+    """RC5：aggregates 为空时不加 GROUP BY（按普通 select 处理）。"""
+    sql = builder.build(_query(
+        intent="aggregate", tables=["products"], columns=["price"],
+        order_by=[NLEntity("order", "最高", "price DESC")], limit=1))
+    assert sql == "SELECT price FROM products ORDER BY price DESC LIMIT 1;"
+    _assert_parses(sql)
+
+
+def test_rc5_topn_with_number_keeps_limit(builder, parser):
+    """RC5 回归：带显式数字的 Top-N 仍保留原 LIMIT。"""
+    sql = builder.build(parser.parse("查询销售额最高的10个客户"))
+    assert sql.endswith("LIMIT 10;")
+    _assert_parses(sql)

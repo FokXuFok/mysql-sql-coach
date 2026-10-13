@@ -45,12 +45,14 @@ class SQLBuilder:
         plain_cols = list(q.columns)
         select_parts = plain_cols + agg_cols if plain_cols else agg_cols
         columns = ", ".join(select_parts) if select_parts else templates.ALL_COLUMNS
+        # aggregates 为空时按普通 select 处理，不加 GROUP BY
+        group_by = self._build_group(q, plain_cols) if q.aggregates else ""
         return templates.render(
             templates.AGGREGATE_TEMPLATE,
             columns=columns,
             table=self._table(q),
             where=self._build_where(q),
-            group_by=self._build_group(q, plain_cols),
+            group_by=group_by,
             order=self._build_order(q),
             limit=self._build_limit(q),
         )

@@ -126,6 +126,8 @@ class NLQuery:
     raw_text: str = ""           # 原始自然语言
     # 被跳过的聚合关键词（如空 schema 下无法确定目标列，避免生成 SUM(*) 这类非法 SQL）
     skipped_aggregates: list[str] = field(default_factory=list)
+    # 值探测未命中的候选值（"北京的用户" 但没有任何文本列命中"北京"），供上层留痕
+    unresolved_values: list[str] = field(default_factory=list)
 
 
 @dataclass

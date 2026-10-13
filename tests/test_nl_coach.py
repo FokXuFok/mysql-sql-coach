@@ -188,3 +188,94 @@ def test_generate_sql_empty_schema_skips_verify(mock_config_mock_mode):
         coach = SQLCoach(mock_config_mock_mode, use_cache=False)
         coach.generate_sql("查询10条订单", execute=False)
     lo_cls.assert_not_called()
+
+
+# --------------------------------------------------------- RC1~RC5 语义缺陷修复
+
+def real_schema() -> Schema:
+    """模拟真实 test 库：无 customers 表，users 无 age/amount 列。"""
+    return Schema(tables={
+        "orders": TableSchema(name="orders", columns={
+            "id": "bigint", "user_id": "bigint", "amount": "decimal",
+            "status": "varchar", "created_at": "datetime"}),
+        "products": TableSchema(name="products", columns={
+            "id": "bigint", "name": "varchar", "price": "decimal",
+            "category": "varchar", "created_at": "datetime"}),
+        "users": TableSchema(name="users", columns={
+            "id": "bigint", "name": "varchar", "email": "varchar",
+            "city": "varchar", "created_at": "datetime"}),
+    })
+
+
+def _connected_coach(mock_config, schema, query_side_effect=None):
+    """构造一个已连库（mock DB）且 schema 固定的 SQLCoach。"""
+    with patch("sql_coach.coach.DBConnector") as db_cls:
+        mock_db = MagicMock()
+        mock_db.is_connected.return_value = True
+        mock_db.query.return_value = []
+        if query_side_effect is not None:
+            mock_db.query.side_effect = query_side_effect
+        mock_db.query_with_columns.return_value = ([], [])
+        db_cls.return_value = mock_db
+        coach = SQLCoach(mock_config, use_cache=False)
+        coach.schema_provider.load_all = lambda: schema
+    return coach, mock_db
+
+
+def test_rc1_unknown_table_lists_available_tables(mock_config):
+    """RC1：识别不到表名时，warning 里列出当前库可用表名。"""
+    coach, _ = _connected_coach(mock_config, real_schema())
+    result = coach.generate_sql("查询10个零件", execute=False)
+
+    assert "unknown_table" in result.generated_sql
+    assert any("orders" in w and "products" in w and "users" in w
+               for w in result.warnings)
+
+
+def test_rc1_no_unknown_table_and_lists_available_tables(mock_config):
+    """RC1：不出现 unknown_table，warnings 里列出当前库可用表名。"""
+    coach, _ = _connected_coach(mock_config, real_schema())
+    result = coach.generate_sql("查询销售额最高的10个客户", execute=False)
+
+    assert "unknown_table" not in result.generated_sql
+    assert result.generated_sql == "SELECT * FROM users LIMIT 10;"
+    assert any("orders" in w and "products" in w and "users" in w
+               for w in result.warnings)
+
+
+def test_rc3_warns_about_skipped_aggregate(mock_config):
+    """RC3：聚合因缺列被跳过时应给出具体 warning。"""
+    coach, _ = _connected_coach(mock_config, real_schema())
+    result = coach.generate_sql("用户的平均年龄", execute=False)
+
+    assert any("未识别到可聚合的列" in w for w in result.warnings)
+    assert any("users" in w for w in result.warnings)
+
+
+def test_rc2_value_probe_end_to_end(mock_config):
+    """RC2：值探测命中 users.city → WHERE city = '北京'。"""
+    def side_effect(sql, params=None):
+        if params and params[0] == "北京" and "`city`" in sql:
+            return [(1,)]
+        return []
+
+    coach, _ = _connected_coach(mock_config, real_schema(), query_side_effect=side_effect)
+    result = coach.generate_sql("查询北京的用户", execute=False)
+
+    assert result.generated_sql == "SELECT * FROM users WHERE city = '北京';"
+
+
+def test_rc4_group_by_category_end_to_end(mock_config):
+    """RC4：'查询每个分类的商品数量' → category 分组 + COUNT(*)。"""
+    coach, _ = _connected_coach(mock_config, real_schema())
+    result = coach.generate_sql("查询每个分类的商品数量", execute=False)
+
+    assert result.generated_sql == "SELECT category, COUNT(*) FROM products GROUP BY category;"
+
+
+def test_rc5_top1_product_end_to_end(mock_config):
+    """RC5：'查询价格最高的商品' → SELECT * ... ORDER BY price DESC LIMIT 1。"""
+    coach, _ = _connected_coach(mock_config, real_schema())
+    result = coach.generate_sql("查询价格最高的商品", execute=False)
+
+    assert result.generated_sql == "SELECT * FROM products ORDER BY price DESC LIMIT 1;"

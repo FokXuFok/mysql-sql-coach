@@ -22,6 +22,8 @@ class EntityExtractor:
     }
     GROUP_KEYWORDS = ("每个", "每种", "各类")
     LIMIT_PAT = re.compile(r"(\d+)\s*(条|个|行|记录|篇|名|位)")
+    # Top-1 关键词：无显式数字时隐含 LIMIT 1（"价格最高的商品" → 取 1 行）
+    TOP1_KEYWORDS = ("最高", "最低", "最大", "最小")
     EQ_OPERATORS = ("为", "是", "等于", "=")
     CMP_OPERATORS = {
         "大于等于": ">=", "不小于": ">=", "小于等于": "<=", "不大于": "<=",
@@ -43,21 +45,43 @@ class EntityExtractor:
     _AGG_TARGET_PAT = re.compile(r"^\s*\w+\s*\(\s*([^)]*?)\s*\)\s*$")
     # 代表列候选：恰好 name / 以 _name 结尾 / 恰好 title
     _REPRESENTATIVE_SUFFIX = "_name"
+    # 文本列类型（用于值探测）
+    _TEXT_TYPES = ("varchar", "char", "text")
+    # 值探测时每张表最多尝试的文本列数
+    _MAX_PROBE_COLUMNS = 5
 
-    def __init__(self, dictionary: SchemaDictionary, schema: Optional[Schema] = None):
+    def __init__(self, dictionary: SchemaDictionary, schema: Optional[Schema] = None,
+                 value_probe=None):
+        """Args:
+            dictionary: schema 词典。
+            schema: 可选 schema，用于选代表列 / 校验列归属 / 值探测。
+            value_probe: 可选回调 `(table, column, value) -> bool`，用于探测
+                某值是否存在于某表的某文本列；默认 None 时行为完全不变。
+        """
         self._dict = dictionary
         self._schema = schema
+        self._value_probe = value_probe
+        self._unresolved_values: list[str] = []
 
     def extract(self, tokens: list[str], intent: str) -> NLQuery:
         """提取所有实体，返回 NLQuery。"""
         text = "".join(tokens)
+        self._unresolved_values = []
         tables, columns = self._collect_tables_columns(tokens, text)
-        aggregates, skipped = self._extract_aggregates(tokens, text)
-        conditions = self._extract_conditions(tokens, text)
-        # 聚合目标列与 WHERE 条件列只参与对应子句，不作为 SELECT 列
-        columns = self._drop_non_selected(columns, aggregates, conditions)
-        group_by = list(columns) if any(k in text for k in self.GROUP_KEYWORDS) else []
-        order_by = self._extract_order(text, columns, aggregates, tables)
+        # 分组列（"每个/每种/各类" 后的列）需保留进 SELECT 与 GROUP BY
+        group_columns = self._extract_group_columns(tokens)
+        aggregates, skipped, skipped_targets = self._extract_aggregates(
+            tokens, text, tables, group_columns)
+        conditions = self._extract_conditions(tokens, text, tables)
+        # 排序键需用原始列集合计算；被跳过的聚合目标列不参与排序
+        order_columns = [c for c in columns if c.lower() not in skipped_targets]
+        order_by = self._extract_order(text, order_columns, aggregates, tables)
+        # 聚合目标列 / WHERE 列 / ORDER 列 / 被跳过聚合的目标列只参与对应子句，
+        # 但分组列例外（它同时出现在 SELECT 与 GROUP BY）。
+        columns = self._drop_non_selected(
+            columns, aggregates, conditions, order_by, group_columns, skipped_targets)
+        group_by = group_columns or (
+            list(columns) if any(k in text for k in self.GROUP_KEYWORDS) else [])
         # 仅当聚合结果被排序时（"销售额最高的10个客户"这类 Top-N）才用表代表列分组；
         # 纯全局聚合（"用户的平均年龄"）不该带 GROUP BY，否则会答非所问。
         if aggregates and not columns and not group_by and order_by:
@@ -76,6 +100,8 @@ class EntityExtractor:
             raw_text=text,
             # 留痕：记录因缺少目标列而被跳过的非法聚合（如 SUM），供上层提示/排查
             skipped_aggregates=skipped,
+            # 留痕：值探测未命中的候选值
+            unresolved_values=list(self._unresolved_values),
         )
         return nl_query
 
@@ -112,9 +138,18 @@ class EntityExtractor:
 
     # ------------------------------------------------------------- 列过滤 / 代表列
 
-    def _drop_non_selected(self, columns, aggregates, conditions) -> list[str]:
-        """剔除只服务于聚合或 WHERE 的列，它们不应出现在 SELECT/GROUP BY。"""
-        excluded = self._aggregate_targets(aggregates) | self._condition_columns(conditions)
+    def _drop_non_selected(self, columns, aggregates, conditions, order_by,
+                           group_columns, skipped_targets) -> list[str]:
+        """剔除只服务于聚合/WHERE/ORDER 的列，它们不应出现在 SELECT。
+
+        分组列（"每个分类"里的 category）是例外：它同时要出现在 SELECT 与 GROUP BY，
+        因此不能被剔除。
+        """
+        excluded = (self._aggregate_targets(aggregates)
+                    | self._condition_columns(conditions)
+                    | self._order_columns(order_by)
+                    | set(skipped_targets))
+        excluded -= {c.lower() for c in group_columns}
         if not excluded:
             return columns
         return [c for c in columns if c.lower() not in excluded]
@@ -132,6 +167,16 @@ class EntityExtractor:
                 targets.add(col.lower())
         return targets
 
+    @classmethod
+    def _order_columns(cls, order_by) -> set[str]:
+        """ORDER BY 里的纯列名（`price DESC` → `price`；聚合/表达式忽略）。"""
+        columns: set[str] = set()
+        for order in order_by:
+            head = (order.mapped or "").split(None, 1)[0]
+            if head and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", head):
+                columns.add(head.lower())
+        return columns
+
     @staticmethod
     def _condition_columns(conditions) -> set[str]:
         """WHERE 条件片段左侧的列名（`status = 'pending'` → `status`）。"""
@@ -140,6 +185,34 @@ class EntityExtractor:
             head = (cond.mapped or "").split(None, 1)[0]
             if head:
                 columns.add(head.lower())
+        return columns
+
+    # ------------------------------------------------------------------ 分组列
+
+    def _extract_group_columns(self, tokens) -> list[str]:
+        """提取分组关键词（每个/每种/各类）紧邻的列（"每个分类" → category）。
+
+        支持关键词与列被 jieba 合成一个 token 的情况（"每个分类"）。
+        """
+        columns: list[str] = []
+        seen: set[str] = set()
+        for i, token in enumerate(tokens):
+            for keyword in self.GROUP_KEYWORDS:
+                if keyword not in token:
+                    continue
+                candidates: list[str] = []
+                rest = token.split(keyword, 1)[1]
+                if rest:
+                    candidates.append(rest)
+                if i + 1 < len(tokens):
+                    candidates.append(tokens[i + 1])
+                for candidate in candidates:
+                    resolved = self._dict.resolve(candidate)
+                    if resolved and self._dict.is_column(resolved):
+                        if resolved.lower() not in seen:
+                            seen.add(resolved.lower())
+                            columns.append(resolved)
+                        break
         return columns
 
     def _representative_column(self, tables) -> Optional[str]:
@@ -161,24 +234,35 @@ class EntityExtractor:
 
     # ------------------------------------------------------------------ 聚合
 
-    def _extract_aggregates(self, tokens, text) -> tuple[list[NLEntity], list[str]]:
-        """提取聚合实体；非 COUNT 聚合缺少目标列时跳过，避免生成 `SUM(*)` 等非法 SQL。
+    def _extract_aggregates(self, tokens, text, tables, group_columns):
+        """提取聚合实体；非 COUNT 聚合缺少目标列（或目标列不属于任何表）时跳过，
+        避免生成 `SUM(*)` / 引用不存在列的非法 SQL。
 
         Returns:
-            (aggregates, skipped)：skipped 为被跳过的聚合关键词，供上层留痕。
+            (aggregates, skipped, skipped_targets)：skipped 为被跳过的聚合关键词，
+            skipped_targets 为这些聚合本应作用、但因缺列被丢弃的列名，供上层留痕。
         """
         aggregates: list[NLEntity] = []
         skipped: list[str] = []
+        skipped_targets: set[str] = set()
         seen: set[str] = set()
+        group_set = {c.lower() for c in group_columns}
         for keyword, func in self.AGGREGATE_MAP.items():
             if keyword not in text:
                 continue
             if keyword in self.ORDER_KEYWORDS:
                 continue  # "最高/最低" 作为排序修饰，交由 ORDER BY 处理
             column = self._find_nearest_column(tokens, keyword)
-            if func != "COUNT" and column == "*":
+            if func == "COUNT":
+                # 目标列是分组列（或不属于任何表）时退化为 COUNT(*)，语义等价且合法
+                if column != "*" and (column.lower() in group_set
+                                      or not self._column_in_tables(column, tables)):
+                    column = "*"
+            elif column == "*" or not self._column_in_tables(column, tables):
                 # MySQL 里只有 COUNT(*) 合法，其余聚合缺目标列时宁可丢弃
                 skipped.append(keyword)
+                if column and column != "*":
+                    skipped_targets.add(column.lower())
                 continue
             mapped = f"{func}({column})"
             if mapped in seen:
@@ -186,7 +270,21 @@ class EntityExtractor:
             seen.add(mapped)
             aggregates.append(NLEntity(type="aggregate", raw=keyword,
                                        mapped=mapped, alias=keyword))
-        return aggregates, skipped
+        return aggregates, skipped, skipped_targets
+
+    def _column_in_tables(self, column: str, tables) -> bool:
+        """该列是否属于识别到的任一张表。
+
+        无法判断时（无 schema / 未识别到表）返回 True，保持既有行为。
+        """
+        if self._schema is None or not tables or not column or column == "*":
+            return True
+        col = column.lower()
+        for table_name in tables:
+            table = self._schema.tables.get(table_name.lower())
+            if table is not None and any(c.lower() == col for c in table.columns):
+                return True
+        return False
 
     def _find_nearest_column(self, tokens, keyword) -> str:
         """聚合作用的列：优先关键词自身映射，其次就近的列 token，兜底 '*'。"""
@@ -274,11 +372,16 @@ class EntityExtractor:
 
     def _extract_limit(self, text):
         match = self.LIMIT_PAT.search(text)
-        return int(match.group(1)) if match else None
+        if match:
+            return int(match.group(1))
+        # "价格最高的商品" 这类无显式数字的 Top-1 语义，隐含 LIMIT 1
+        if any(keyword in text for keyword in self.TOP1_KEYWORDS):
+            return 1
+        return None
 
     # ------------------------------------------------------------------ 条件
 
-    def _extract_conditions(self, tokens, text) -> list[NLEntity]:
+    def _extract_conditions(self, tokens, text, tables) -> list[NLEntity]:
         conditions: list[NLEntity] = []
         offsets = self._token_offsets(tokens)
         for i, token in enumerate(tokens):
@@ -312,7 +415,72 @@ class EntityExtractor:
                 raw=f"{tokens[i - 1]}{token}{value}",
                 mapped=f"{column} {op} {self._format_value(value, unit_token)}",
             ))
+        # 隐式条件："值 + 的 + 表名"（如"北京的用户"），通过值探测补出列
+        conditions.extend(self._extract_value_conditions(tokens, tables, conditions))
         return conditions
+
+    def _extract_value_conditions(self, tokens, tables, existing) -> list[NLEntity]:
+        """识别"未识别中文词 + 的 + 表名"，用 value_probe 探测命中的文本列。
+
+        只有显式传入 value_probe 时才生效（默认 None → 行为不变）。
+        命中即生成 `列 = '值'`；都没命中则跳过并在 NLQuery.unresolved_values 留痕。
+        """
+        if self._value_probe is None or self._schema is None or not tables:
+            return []
+        used_values = {cond.mapped for cond in existing}
+        results: list[NLEntity] = []
+        for i in range(1, len(tokens) - 1):
+            if tokens[i] != "的":
+                continue
+            word = tokens[i - 1]
+            table = self._dict.resolve(tokens[i + 1])
+            if not table or not self._dict.is_table(table):
+                continue
+            # 已能识别为列/表/关键词的 token 不是候选值
+            if self._dict.resolve(word) is not None or self._is_keyword(word):
+                continue
+            if not self._has_cjk(word):
+                continue
+            hit = None
+            for column in self._text_columns(table):
+                if self._value_probe(table, column, word):
+                    hit = column
+                    break
+            if hit is None:
+                self._unresolved_values.append(word)
+                continue
+            mapped = f"{hit} = '{word}'"
+            if mapped in used_values:
+                continue
+            used_values.add(mapped)
+            results.append(NLEntity(
+                type="condition", raw=f"{word}的{tokens[i + 1]}", mapped=mapped))
+        return results
+
+    def _text_columns(self, table: str) -> list[str]:
+        """表中可作为值探测目标的文本列（varchar/char/text），最多取 5 个。"""
+        if self._schema is None:
+            return []
+        table_schema = self._schema.tables.get(table.lower())
+        if table_schema is None:
+            return []
+        columns: list[str] = []
+        for name, dtype in table_schema.columns.items():
+            if (dtype or "").lower().startswith(self._TEXT_TYPES):
+                columns.append(name)
+            if len(columns) >= self._MAX_PROBE_COLUMNS:
+                break
+        return columns
+
+    def _is_keyword(self, word: str) -> bool:
+        """该词是否是解析关键词（排序/聚合/分组/比较），而非待探测的值。"""
+        return (word in self.ORDER_KEYWORDS or word in self.AGGREGATE_MAP
+                or word in self.GROUP_KEYWORDS or word in self.EQ_OPERATORS
+                or word in self.CMP_OPERATORS)
+
+    @staticmethod
+    def _has_cjk(text: str) -> bool:
+        return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
     @staticmethod
     def _token_offsets(tokens) -> list[int]:

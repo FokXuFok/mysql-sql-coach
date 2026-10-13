@@ -235,3 +235,91 @@ def test_topn_aggregate_still_uses_representative_column():
     q = EntityExtractor(SchemaDictionary(schema), schema).extract(
         ["查询", "销售额", "最高", "的", "10", "个", "客户"], "aggregate")
     assert q.columns == ["customer_name"]
+
+
+# --------------------------------------------------------- RC1~RC5 语义缺陷修复
+
+def real_schema() -> Schema:
+    """模拟真实 test 库：无 customers 表，users 无 age/amount 列。"""
+    return Schema(tables={
+        "orders": TableSchema(name="orders", columns={
+            "id": "bigint", "user_id": "bigint", "amount": "decimal",
+            "status": "varchar", "created_at": "datetime"}),
+        "products": TableSchema(name="products", columns={
+            "id": "bigint", "name": "varchar", "price": "decimal",
+            "category": "varchar", "created_at": "datetime"}),
+        "users": TableSchema(name="users", columns={
+            "id": "bigint", "name": "varchar", "email": "varchar",
+            "city": "varchar", "created_at": "datetime"}),
+    })
+
+
+def _real_extractor(value_probe=None) -> EntityExtractor:
+    schema = real_schema()
+    return EntityExtractor(SchemaDictionary(schema), schema, value_probe=value_probe)
+
+
+def test_rc1_customer_maps_to_users_and_missing_amount_aggregate_skipped():
+    """RC1：客户→users；users 无 amount 列 → SUM 被跳过而非生成 unknown_table。"""
+    q = _real_extractor().extract(
+        ["查询", "销售额", "最高", "的", "10", "个", "客户"], "aggregate")
+    assert q.tables == ["users"]
+    assert q.aggregates == []
+    assert q.skipped_aggregates == ["销售额"]
+    # 被跳过的聚合目标列不得残留到 SELECT / ORDER BY
+    assert "amount" not in q.columns
+    assert all("amount" not in o.mapped for o in q.order_by)
+
+
+def test_rc2_value_probe_adds_implicit_condition():
+    """RC2：'北京的用户' 通过 value_probe 命中 users.city → 生成 city = '北京'。"""
+
+    def probe(table, column, value):
+        return table == "users" and column == "city" and value == "北京"
+
+    q = _real_extractor(value_probe=probe).extract(["查询", "北京", "的", "用户"], "select")
+    assert [c.mapped for c in q.conditions] == ["city = '北京'"]
+
+
+def test_rc2_value_probe_none_keeps_behavior_unchanged():
+    """RC2：value_probe 为 None 时行为完全不变（不探测、不加条件）。"""
+    q = _real_extractor().extract(["查询", "北京", "的", "用户"], "select")
+    assert q.conditions == []
+
+
+def test_rc2_value_probe_miss_records_trace():
+    """RC2：候选值都没命中时跳过，并在 NLQuery 里留痕。"""
+    q = _real_extractor(value_probe=lambda t, c, v: False).extract(
+        ["查询", "火星", "的", "用户"], "select")
+    assert q.conditions == []
+    assert q.unresolved_values == ["火星"]
+
+
+def test_rc3_aggregate_skipped_when_target_column_not_in_table():
+    """RC3：目标列不属于任何识别到的表时跳过聚合（供上层提示）。"""
+    q = _real_extractor().extract(["用户", "的", "平均", "年龄"], "aggregate")
+    assert q.tables == ["users"]
+    assert q.aggregates == []
+    assert q.skipped_aggregates == ["平均"]
+
+
+def test_rc4_group_column_kept_and_count_star():
+    """RC4：'每个分类' 的 category 应作为分组列保留，且 COUNT 用 *。"""
+    q = _real_extractor().extract(
+        ["查询", "每个", "分类", "的", "商品", "数量"], "aggregate")
+    assert q.columns == ["category"]
+    assert q.group_by == ["category"]
+    assert [a.mapped for a in q.aggregates] == ["COUNT(*)"]
+
+
+def test_rc5_top1_without_number_implies_limit_one():
+    """RC5：'最高/最低' 且无显式数字时隐含 LIMIT 1。"""
+    q = _real_extractor().extract(["查询", "价格", "最高", "的", "商品"], "select")
+    assert q.limit == 1
+
+
+def test_rc5_explicit_number_keeps_limit():
+    """RC5 回归：带显式数字时仍取该数字。"""
+    q = _real_extractor().extract(
+        ["查询", "销售额", "最高", "的", "10", "个", "客户"], "aggregate")
+    assert q.limit == 10
