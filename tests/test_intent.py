@@ -64,10 +64,11 @@ def test_intent_keywords_shape():
 
 
 def test_aggregate_keywords_derived_from_aggregate_map():
-    """aggregate 关键词必须从 AGGREGATE_MAP 的键派生，避免两处漂移。"""
+    """aggregate 关键词必须**包含** AGGREGATE_MAP 的全部键，避免两处漂移。"""
     from sql_coach.nl.extractor import EntityExtractor
 
-    assert set(INTENT_KEYWORDS["aggregate"]) == set(EntityExtractor.AGGREGATE_MAP)
+    derived = set(EntityExtractor.AGGREGATE_MAP)
+    assert derived <= set(INTENT_KEYWORDS["aggregate"])
 
 
 @pytest.mark.parametrize("tokens", [
@@ -78,3 +79,19 @@ def test_aggregate_keywords_derived_from_aggregate_map():
 def test_aggregate_intent_covers_map_only_keywords(tokens):
     """总额 / 总计 / 均值 只存在于 AGGREGATE_MAP，也应判为 aggregate。"""
     assert IntentRecognizer().recognize(tokens) == "aggregate"
+
+
+def test_extra_aggregate_keywords_still_recognized():
+    """补的意图词（统计/多少）仍应判为 aggregate，且强计数词优先。"""
+    r = IntentRecognizer()
+    assert r.recognize(["统计", "各", "城市", "的", "用户"]) == "aggregate"
+    assert r.recognize(["销售额", "是", "多少"]) == "aggregate"
+    # 强计数词仍优先
+    assert r.recognize(["有", "多少条", "订单"]) == "count"
+
+
+def test_skipped_aggregates_is_declared_field():
+    """skipped_aggregates 必须是 NLQuery 的正式字段，而非动态属性。"""
+    from dataclasses import fields
+    from sql_coach.models import NLQuery
+    assert "skipped_aggregates" in {f.name for f in fields(NLQuery)}

@@ -57,8 +57,10 @@ class EntityExtractor:
         # 聚合目标列与 WHERE 条件列只参与对应子句，不作为 SELECT 列
         columns = self._drop_non_selected(columns, aggregates, conditions)
         group_by = list(columns) if any(k in text for k in self.GROUP_KEYWORDS) else []
-        # 有聚合但既无显式列也无分组列时，用表代表列兜底（供 builder 作 GROUP BY）
-        if aggregates and not columns and not group_by:
+        order_by = self._extract_order(text, columns, aggregates, tables)
+        # 仅当聚合结果被排序时（"销售额最高的10个客户"这类 Top-N）才用表代表列分组；
+        # 纯全局聚合（"用户的平均年龄"）不该带 GROUP BY，否则会答非所问。
+        if aggregates and not columns and not group_by and order_by:
             representative = self._representative_column(tables)
             if representative:
                 columns = [representative]
@@ -68,14 +70,13 @@ class EntityExtractor:
             columns=columns,
             conditions=conditions,
             aggregates=aggregates,
-            order_by=self._extract_order(text, columns, aggregates, tables),
+            order_by=order_by,
             group_by=group_by,
             limit=self._extract_limit(text),
             raw_text=text,
+            # 留痕：记录因缺少目标列而被跳过的非法聚合（如 SUM），供上层提示/排查
+            skipped_aggregates=skipped,
         )
-        # 留痕：记录因缺少目标列而被跳过的非法聚合（如 SUM），供上层提示/排查。
-        # NLQuery 未声明该字段，这里以动态属性承载（避免改动 models.py）。
-        nl_query.skipped_aggregates = skipped
         return nl_query
 
     # ------------------------------------------------------------------ 表 / 列

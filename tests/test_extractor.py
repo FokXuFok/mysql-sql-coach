@@ -65,10 +65,10 @@ def test_condition_column_not_in_columns(extractor):
     ({"id": "bigint", "amount": "decimal"}, None),
 ])
 def test_representative_column_selection_order(columns, expected):
-    """聚合且无显式列/group_by 时，按 name → *_name → title 选代表列。"""
+    """Top-N 聚合（带排序）且无显式列/group_by 时，按 name → *_name → title 选代表列。"""
     schema = Schema(tables={"t": TableSchema(name="t", columns=columns)})
     ex = EntityExtractor(SchemaDictionary(schema), schema)
-    q = ex.extract(["统计", "t", "数量"], "aggregate")
+    q = ex.extract(["查询", "t", "数量", "最高", "的", "10", "个"], "aggregate")
     assert q.columns == ([expected] if expected else [])
 
 
@@ -178,7 +178,7 @@ def test_aggregate_skipped_when_non_count_target_missing():
     ex = EntityExtractor(SchemaDictionary(Schema()))  # 空 schema
     q = ex.extract(["查询", "销售额", "最高", "的", "10", "个", "客户"], "aggregate")
     assert q.aggregates == []
-    assert getattr(q, "skipped_aggregates", []) == ["销售额"]
+    assert q.skipped_aggregates == ["销售额"]
 
 
 def test_count_still_uses_star_when_target_missing(extractor):
@@ -216,3 +216,22 @@ def test_condition_plain_literal_unchanged(extractor):
     """Important 5：无引号的简单值仍按单 token 处理。"""
     q = extractor.extract(["查找", "status", "为", "pending", "的", "订单"], "select")
     assert [c.mapped for c in q.conditions] == ["status = 'pending'"]
+
+
+def test_global_aggregate_has_no_group_by():
+    """纯全局聚合不应带 GROUP BY（"用户的平均年龄"只该返回一个数）。"""
+    schema = Schema(tables={"users": TableSchema(
+        name="users", columns={"name": "varchar", "age": "int"})})
+    q = EntityExtractor(SchemaDictionary(schema), schema).extract(
+        ["查询", "用户", "的", "平均", "年龄"], "aggregate")
+    assert q.columns == []          # 不应补代表列
+    assert q.group_by == []
+
+
+def test_topn_aggregate_still_uses_representative_column():
+    """Top-N 聚合仍需代表列作分组（"销售额最高的10个客户"）。"""
+    schema = Schema(tables={"customers": TableSchema(
+        name="customers", columns={"customer_name": "varchar", "amount": "decimal"})})
+    q = EntityExtractor(SchemaDictionary(schema), schema).extract(
+        ["查询", "销售额", "最高", "的", "10", "个", "客户"], "aggregate")
+    assert q.columns == ["customer_name"]

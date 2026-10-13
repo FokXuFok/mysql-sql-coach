@@ -124,6 +124,8 @@ class NLQuery:
     group_by: list[str]         # 分组列
     limit: Optional[int] = None  # LIMIT 值
     raw_text: str = ""           # 原始自然语言
+    # 被跳过的聚合关键词（如空 schema 下无法确定目标列，避免生成 SUM(*) 这类非法 SQL）
+    skipped_aggregates: list[str] = field(default_factory=list)
 
 
 @dataclass

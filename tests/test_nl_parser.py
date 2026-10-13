@@ -106,7 +106,7 @@ def test_parse_empty_schema_skips_non_count_star_aggregate():
     """Important 2：空 schema 下非 COUNT 聚合不得生成 SUM(*)。"""
     result = NLParser(Schema()).parse("查询销售额最高的10个客户")
     assert result.aggregates == []
-    assert getattr(result, "skipped_aggregates", []) == ["销售额"]
+    assert result.skipped_aggregates == ["销售额"]
 
 
 def test_parse_recent_users_orders_by_time_column(parser):
