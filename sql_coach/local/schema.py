@@ -11,6 +11,7 @@ class TableSchema:
     name: str
     columns: dict[str, str] = field(default_factory=dict)
     indexes: list[list[str]] = field(default_factory=list)
+    comments: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -65,6 +66,34 @@ class SchemaProvider:
             self._attempted.update(t.lower() for t in wanted)
         return Schema(tables=dict(self._tables))
 
+    def load_all(self, max_tables: int = 100) -> Schema:
+        """读取当前数据库所有表的结构（用于构建 NL 词典）。
+
+        与 `load` 一致地累积缓存：已读过的表不重复查；表数量用 `max_tables` 限制，
+        避免库中表过多导致查询卡顿。
+        """
+        if self.connector is None or not self._is_connected():
+            return Schema()
+        try:
+            names = [row[0] for row in self.connector.query(
+                "SELECT TABLE_NAME FROM information_schema.TABLES "
+                "WHERE TABLE_SCHEMA = DATABASE() "
+                f"LIMIT {int(max_tables)}"
+            )]
+        except Exception as e:  # noqa: BLE001 - 降级不阻断
+            logger.warning("读取表列表失败，降级为空 schema: %s", e)
+            return Schema(tables=dict(self._tables))
+        wanted = [t for t in names if t and t.lower() not in self._attempted]
+        if wanted:
+            try:
+                fetched = self._read(wanted)
+            except Exception as e:  # noqa: BLE001 - 降级不阻断
+                logger.warning("读取 schema 失败，降级为空 schema: %s", e)
+                return Schema(tables=dict(self._tables))
+            self._merge(fetched)
+            self._attempted.update(t.lower() for t in wanted)
+        return Schema(tables=dict(self._tables))
+
     def _merge(self, schema: Schema) -> None:
         for name, ts in schema.tables.items():
             existing = self._tables.get(name)
@@ -72,6 +101,7 @@ class SchemaProvider:
                 self._tables[name] = ts
                 continue
             existing.columns.update(ts.columns)
+            existing.comments.update(ts.comments)
             for idx in ts.indexes:
                 if idx not in existing.indexes:
                     existing.indexes.append(idx)
@@ -87,14 +117,16 @@ class SchemaProvider:
         lowered = [t.lower() for t in tables]
         placeholders = ",".join(["%s"] * len(lowered))
 
-        for tname, cname, dtype in self.connector.query(
-            "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS "
+        for tname, cname, dtype, comment in self.connector.query(
+            "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_COMMENT FROM information_schema.COLUMNS "
             f"WHERE TABLE_SCHEMA = DATABASE() AND LOWER(TABLE_NAME) IN ({placeholders}) "
             "ORDER BY TABLE_NAME, ORDINAL_POSITION",
             tuple(lowered),
         ):
             ts = schema.tables.setdefault(tname.lower(), TableSchema(name=tname))
             ts.columns[cname.lower()] = (dtype or "").lower()
+            if comment:
+                ts.comments[cname.lower()] = comment
 
         grouped: dict[tuple[str, str], list[tuple[int, str]]] = {}
         for tname, iname, seq, cname in self.connector.query(
