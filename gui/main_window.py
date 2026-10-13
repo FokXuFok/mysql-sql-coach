@@ -340,6 +340,10 @@ class MainWindow(QMainWindow):
 
         if result.error:
             self.status_bar.showMessage("生成完成, 但执行失败")
+        elif result.warnings:
+            # 有提示时状态栏要显眼，否则用户只看"完成"会以为生成的 SQL 就是他要的
+            self.status_bar.showMessage(
+                f"⚠ 有 {len(result.warnings)} 条提示 | 结果 {len(result.rows)} 行（请查看提示确认是否符合预期）")
         else:
             self.status_bar.showMessage(f"完成 | 结果 {len(result.rows)} 行")
 

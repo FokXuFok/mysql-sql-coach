@@ -332,3 +332,24 @@ def test_message_boxes_retained_across_calls(app):
     assert texts == ["1", "2"]
     for b in win._message_boxes:
         b.close()
+
+
+def test_nl_status_bar_flags_warnings(app, monkeypatch):
+    """有 warnings 时状态栏必须显眼提示，避免用户误以为结果就是他要的。"""
+    from sql_coach.models import NLQuery, NLQueryResult
+
+    win = MainWindow(config=make_config())
+    result = NLQueryResult(
+        nl_query=NLQuery(intent="select", tables=["users"], columns=[],
+                         conditions=[], aggregates=[], order_by=[], group_by=[]),
+        generated_sql="SELECT * FROM users;",
+        warnings=["未识别到可聚合的列（关键词：销售额）"],
+    )
+    shown = []
+    monkeypatch.setattr(win, "_show_message", lambda *a, **k: shown.append(a))
+    win._on_nl_finished(result)
+
+    msg = win.status_bar.currentMessage()
+    assert "⚠" in msg
+    assert "1 条提示" in msg
+    assert shown, "仍应弹出提示框"
