@@ -171,3 +171,45 @@ def test_query_returns_empty_when_not_connected():
 def test_mock_connector_query_returns_empty():
     from sql_coach.db.mock import MockConnector
     assert MockConnector().query("SELECT 1") == []
+
+
+def test_query_with_columns_returns_empty_when_not_connected():
+    """未连接时 query_with_columns 返回 ([], [])。"""
+    conn = DBConnector(DBConfig("h", 3306, "u", "p", "d"))
+    assert conn.query_with_columns("SELECT 1") == ([], [])
+
+
+def test_query_with_columns_returns_columns_and_rows(db_config):
+    """连接时用 cursor.description 取列名，并返回全部行。"""
+    conn = DBConnector(db_config)
+    mock_conn = MagicMock()
+    mock_conn.open = True
+    mock_cursor = MagicMock()
+    mock_cursor.description = (("city", None, None, None, None, None, None),
+                               ("cnt", None, None, None, None, None, None))
+    mock_cursor.fetchall.return_value = [("北京", 3), ("上海", 2)]
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    conn._conn = mock_conn
+
+    columns, rows = conn.query_with_columns("SELECT city, COUNT(*) FROM users GROUP BY city")
+    assert columns == ["city", "cnt"]
+    assert rows == [("北京", 3), ("上海", 2)]
+
+
+def test_query_with_columns_empty_description(db_config):
+    """cursor.description 为空（如 DDL）时列名为空列表。"""
+    conn = DBConnector(db_config)
+    mock_conn = MagicMock()
+    mock_conn.open = True
+    mock_cursor = MagicMock()
+    mock_cursor.description = None
+    mock_cursor.fetchall.return_value = []
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    conn._conn = mock_conn
+
+    assert conn.query_with_columns("SELECT 1") == ([], [])
+
+
+def test_mock_connector_query_with_columns_returns_empty():
+    from sql_coach.db.mock import MockConnector
+    assert MockConnector().query_with_columns("SELECT 1") == ([], [])

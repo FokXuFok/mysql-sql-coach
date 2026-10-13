@@ -29,5 +29,9 @@ class MockConnector:
         """模拟连接器无真实数据，返回空列表。"""
         return []
 
+    def query_with_columns(self, sql: str, params=None) -> tuple[list[str], list[tuple]]:
+        """模拟连接器无真实数据，返回 (空列名, 空行)。"""
+        return [], []
+
     def close(self) -> None:
         pass

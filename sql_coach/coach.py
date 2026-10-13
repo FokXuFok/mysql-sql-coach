@@ -7,10 +7,13 @@ from typing import Callable, Optional
 
 from .models import (
     Config, SQLInfo, ExplainResult, AnalysisResult, BenchmarkResult, Complexity,
-    IndexImpact,
+    IndexImpact, NLQueryResult,
 )
 from .local.complexity import ComplexityScorer
+from .local.engine import LocalOptimizer
 from .local.schema import Schema, SchemaProvider
+from .nl.parser import NLParser
+from .nl_to_sql.builder import SQLBuilder
 from .optimizer import select_optimizer, AIOptimizerAdapter
 from .engine.sql_parser import parse as parse_sql
 from .ai.factory import create_ai_engine
@@ -176,3 +179,62 @@ class SQLCoach:
     def close(self) -> None:
         """Clean up resources."""
         self.db.close()
+
+    def generate_sql(
+        self,
+        text: str,
+        execute: bool = True,
+        verify: bool = True,
+    ) -> NLQueryResult:
+        """自然语言转 SQL。
+
+        Args:
+            text: 自然语言描述。
+            execute: 是否执行生成的 SQL（mock 或未连接时不执行）。
+            verify: 是否用本地规则引擎校验生成的 SQL（仅取 problems 作提示，
+                不改写 SQL，避免改变用户意图）。
+        """
+        # 1. 读取 schema（连不上库时降级为空 schema）
+        if not self.config.mock and self.db.is_connected():
+            schema = self.schema_provider.load_all()
+        else:
+            schema = Schema()
+
+        # 2. 解析自然语言 → 3. 生成 SQL
+        nl_query = NLParser(schema).parse(text)
+        sql = SQLBuilder().build(nl_query)
+
+        # 4. 校验（可选）：仅取 problems 的描述作为 warnings，不使用 optimized_sql
+        warnings: list[str] = []
+        if verify and schema:
+            sql_info = parse_sql(sql)
+            analysis = LocalOptimizer().optimize(sql_info, schema)
+            warnings = [p.description for p in analysis.problems]
+
+        # 5. 表名识别失败提示
+        if not nl_query.tables or "unknown_table" in nl_query.tables:
+            warnings.append(
+                "未能识别表名，已使用 unknown_table 占位，请补充表名或检查数据库 schema。")
+
+        # 6. 执行查询（可选）
+        columns: list[str] = []
+        rows: list[tuple] = []
+        executed = False
+        error = ""
+        if execute and not self.config.mock and self.db.is_connected():
+            try:
+                columns, rows = self.db.query_with_columns(sql)
+                executed = True
+            except Exception as e:  # noqa: BLE001 - 执行失败仅记录，不中断
+                logger.warning("执行生成的 SQL 失败: %s", e)
+                error = str(e)
+
+        return NLQueryResult(
+            nl_query=nl_query,
+            generated_sql=sql,
+            columns=columns,
+            rows=rows,
+            warnings=warnings,
+            executed=executed,
+            error=error,
+        )

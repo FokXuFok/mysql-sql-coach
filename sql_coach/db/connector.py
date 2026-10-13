@@ -85,6 +85,20 @@ class DBConnector:
             cursor.execute(sql, params)
             return cursor.fetchall()
 
+    def query_with_columns(self, sql: str, params=None) -> tuple[list[str], list[tuple]]:
+        """执行只读查询，返回 (列名列表, 行数据列表)。
+
+        未连接时记录警告并返回 ([], [])，与 query() 风格一致。
+        """
+        if not self.is_connected():
+            logger.warning("数据库未连接，query_with_columns 返回空结果")
+            return [], []
+        with self._conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
+        return columns, rows
+
     def close(self) -> None:
         """Close the connection."""
         if self._conn:
