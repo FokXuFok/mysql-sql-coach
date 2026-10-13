@@ -26,6 +26,7 @@ SQL Coach 输入一条 SQL，自动连接 MySQL 执行 EXPLAIN，调用 AI 大�
 - 本地规则引擎：13 条规则，简单/中等 SQL 毫秒级优化，复杂 SQL 才调用 AI（自动分流）
 - 索引实测模式：临时建索引 → 复测 → 自动回滚，基于选择性数据给出"建议采纳/不建议创建"结论
 - 启动环境自检：自动检测 .env / MySQL / AI 配置，能安全修复的自动修复
+- **自然语言转 SQL**：用中文描述需求（如"查询销售额最高的10个客户"）直接生成并执行 SQL，**纯本地算法、不调用 AI**
 - 跨平台支持：Windows / macOS / Linux
 
 ## 快速开始
@@ -75,6 +76,55 @@ DEEPSEEK_API_KEY=你的API key
 - 历史记录对话框可查看之前的分析记录
 - 一键导出 Markdown / HTML 报告
 - 设置对话框可调整 AI 模型、数据库连接、性能对比次数、索引实测开关
+- **模式切换**：工具栏最左侧可在「优化模式」与「自然语言模式」间切换
+
+## 自然语言转 SQL
+
+用中文描述你想查什么，工具会**在本地**解析并生成 SQL、执行查询、展示结果。
+**全程不调用 AI 大模型**——基于 jieba 分词 + schema 词典 + 模板生成。
+
+### GUI
+
+工具栏模式下拉切到「自然语言模式」，在左侧输入描述，点「✨ 生成 SQL」：
+
+```
+查询销售额最高的10个客户
+```
+→ 生成并执行：
+```sql
+SELECT customer_name, SUM(amount) FROM customers GROUP BY customer_name
+ORDER BY SUM(amount) DESC LIMIT 10;
+```
+
+右侧上方展示生成的 SQL（可复制、可一键「送入优化模式」继续分析），下方是查询结果表格。
+
+### CLI
+
+```bash
+# 生成并执行
+sql-coach nl2sql "查询销售额最高的10个客户"
+
+# 只生成不执行
+sql-coach nl2sql "统计每个城市的用户数量" --no-execute
+
+# 模拟模式（不连数据库，仅演示生成）
+sql-coach nl2sql "查询最近10条订单" --mock
+```
+
+### 支持的说法（示例）
+
+| 自然语言 | 生成的 SQL |
+|---------|-----------|
+| 查询销售额最高的10个客户 | `SELECT customer_name, SUM(amount) FROM customers GROUP BY customer_name ORDER BY SUM(amount) DESC LIMIT 10;` |
+| 查找status为pending的订单 | `SELECT * FROM orders WHERE status = 'pending';` |
+| 统计每个城市的用户数量 | `SELECT city, COUNT(*) FROM users GROUP BY city;` |
+| 查询最近10条订单 | `SELECT * FROM orders ORDER BY created_at DESC LIMIT 10;` |
+| 有多少条status为paid的订单 | `SELECT COUNT(*) AS cnt FROM orders WHERE status = 'paid';` |
+| 查询用户的平均年龄 | `SELECT AVG(age) FROM users;` |
+
+> **能力边界**：目前只支持**单表**查询（含 WHERE / GROUP BY / ORDER BY / LIMIT / 聚合）。
+> 多表 JOIN 需要显式指定关联关系，属后续演进方向。
+> 生成的表名/列名会与数据库真实 schema 校验，识别不出时给出警告而不是瞎猜。
 
 ### 方式二：命令行 CLI（推荐开发者）
 
