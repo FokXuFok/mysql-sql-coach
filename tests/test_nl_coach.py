@@ -14,7 +14,7 @@ def make_schema() -> Schema:
     """构造含 customers / orders / users 三张表的测试 schema。"""
     return Schema(tables={
         "customers": TableSchema(name="customers", columns={
-            "id": "bigint", "name": "varchar", "city": "varchar",
+            "id": "bigint", "customer_name": "varchar", "city": "varchar",
             "amount": "decimal", "created_at": "datetime"}),
         "orders": TableSchema(name="orders", columns={
             "id": "bigint", "customer_id": "bigint", "status": "varchar",
@@ -93,6 +93,22 @@ def test_generate_sql_executes_when_connected(mock_config):
     assert result.columns == ["city", "cnt"]
     assert result.rows == [("北京", 3)]
     assert "GROUP BY city" in result.generated_sql
+
+
+def test_generate_sql_top_customers_groups_by_customer_name(mock_config):
+    """NL→SQL：'查询销售额最高的10个客户' 应按客户名分组，而非按金额分组。"""
+    with patch("sql_coach.coach.DBConnector") as db_cls:
+        mock_db = MagicMock()
+        mock_db.is_connected.return_value = True
+        mock_db.query_with_columns.return_value = (
+            ["customer_name", "SUM(amount)"], [("张三", 99999)])
+        db_cls.return_value = mock_db
+
+        coach = SQLCoach(mock_config, use_cache=False)
+        coach.schema_provider.load_all = lambda: make_schema()
+        result = coach.generate_sql("查询销售额最高的10个客户")
+
+    assert "GROUP BY customer_name" in result.generated_sql
 
 
 def test_generate_sql_not_connected_does_not_execute(mock_config):

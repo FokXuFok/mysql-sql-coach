@@ -14,7 +14,7 @@ class NLParser:
         self._dict = SchemaDictionary(schema)
         self._tokenizer = Tokenizer(self._dict)
         self._intent = IntentRecognizer()
-        self._extractor = EntityExtractor(self._dict)
+        self._extractor = EntityExtractor(self._dict, schema)
 
     def parse(self, text: str) -> NLQuery:
         """解析自然语言文本，返回 NLQuery。"""

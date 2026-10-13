@@ -10,7 +10,7 @@ def make_schema() -> Schema:
     """构造含 customers / orders / users 三张表的测试 schema。"""
     return Schema(tables={
         "customers": TableSchema(name="customers", columns={
-            "id": "bigint", "name": "varchar", "city": "varchar",
+            "id": "bigint", "customer_name": "varchar", "city": "varchar",
             "amount": "decimal", "created_at": "datetime"}),
         "orders": TableSchema(name="orders", columns={
             "id": "bigint", "customer_id": "bigint", "status": "varchar",
@@ -23,7 +23,8 @@ def make_schema() -> Schema:
 
 @pytest.fixture
 def extractor() -> EntityExtractor:
-    return EntityExtractor(SchemaDictionary(make_schema()))
+    schema = make_schema()
+    return EntityExtractor(SchemaDictionary(schema), schema)
 
 
 def test_extract_table_from_chinese_alias(extractor):
@@ -40,6 +41,42 @@ def test_extract_table_when_jieba_merges_words(extractor):
 def test_extract_columns(extractor):
     q = extractor.extract(["查询", "城市", "和", "状态"], "select")
     assert q.columns == ["city", "status"]
+
+
+def test_aggregate_target_column_not_in_columns(extractor):
+    """聚合的目标列（SUM 的 amount）不应进入 columns；补入代表列。"""
+    q = extractor.extract(
+        ["查询", "销售额", "最高", "的", "10", "个", "客户"], "aggregate")
+    assert [a.mapped for a in q.aggregates] == ["SUM(amount)"]
+    assert q.columns == ["customer_name"]
+
+
+def test_condition_column_not_in_columns(extractor):
+    """WHERE 条件里的列（status）不应进入 columns。"""
+    q = extractor.extract(["查找", "status", "为", "pending", "的", "订单"], "select")
+    assert q.columns == []
+    assert [c.mapped for c in q.conditions] == ["status = 'pending'"]
+
+
+@pytest.mark.parametrize("columns,expected", [
+    ({"id": "bigint", "name": "varchar", "customer_name": "varchar"}, "name"),
+    ({"id": "bigint", "customer_name": "varchar"}, "customer_name"),
+    ({"id": "bigint", "title": "varchar"}, "title"),
+    ({"id": "bigint", "amount": "decimal"}, None),
+])
+def test_representative_column_selection_order(columns, expected):
+    """聚合且无显式列/group_by 时，按 name → *_name → title 选代表列。"""
+    schema = Schema(tables={"t": TableSchema(name="t", columns=columns)})
+    ex = EntityExtractor(SchemaDictionary(schema), schema)
+    q = ex.extract(["统计", "t", "数量"], "aggregate")
+    assert q.columns == ([expected] if expected else [])
+
+
+def test_representative_column_requires_schema():
+    """未传 schema 时保持向后兼容：不补代表列。"""
+    ex = EntityExtractor(SchemaDictionary(make_schema()))
+    q = ex.extract(["查询", "销售额", "最高", "的", "10", "个", "客户"], "aggregate")
+    assert q.columns == []
 
 
 def test_extract_no_duplicate_columns(extractor):

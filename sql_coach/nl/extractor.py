@@ -1,6 +1,8 @@
 """从分词结果中提取结构化实体：表名、列名、条件、聚合、排序、分组、LIMIT。"""
 import re
+from typing import Optional
 
+from ..local.schema import Schema
 from ..models import NLEntity, NLQuery
 from .dictionary import SchemaDictionary
 
@@ -28,23 +30,37 @@ class EntityExtractor:
     }
     TIME_SYNONYMS = ("时间", "日期")
     _NUMBER_PAT = re.compile(r"-?\d+(\.\d+)?")
+    # 聚合片段（如 "SUM(amount)"）中的目标列
+    _AGG_TARGET_PAT = re.compile(r"^\s*\w+\s*\(\s*([^)]*?)\s*\)\s*$")
+    # 代表列候选：恰好 name / 以 _name 结尾 / 恰好 title
+    _REPRESENTATIVE_SUFFIX = "_name"
 
-    def __init__(self, dictionary: SchemaDictionary):
+    def __init__(self, dictionary: SchemaDictionary, schema: Optional[Schema] = None):
         self._dict = dictionary
+        self._schema = schema
 
     def extract(self, tokens: list[str], intent: str) -> NLQuery:
         """提取所有实体，返回 NLQuery。"""
         text = "".join(tokens)
         tables, columns = self._collect_tables_columns(tokens, text)
         aggregates = self._extract_aggregates(tokens, text)
+        conditions = self._extract_conditions(tokens)
+        # 聚合目标列与 WHERE 条件列只参与对应子句，不作为 SELECT 列
+        columns = self._drop_non_selected(columns, aggregates, conditions)
+        group_by = list(columns) if any(k in text for k in self.GROUP_KEYWORDS) else []
+        # 有聚合但既无显式列也无分组列时，用表代表列兜底（供 builder 作 GROUP BY）
+        if aggregates and not columns and not group_by:
+            representative = self._representative_column(tables)
+            if representative:
+                columns = [representative]
         return NLQuery(
             intent=intent,
             tables=tables,
             columns=columns,
-            conditions=self._extract_conditions(tokens),
+            conditions=conditions,
             aggregates=aggregates,
             order_by=self._extract_order(text, columns, aggregates),
-            group_by=list(columns) if any(k in text for k in self.GROUP_KEYWORDS) else [],
+            group_by=group_by,
             limit=self._extract_limit(text),
             raw_text=text,
         )
@@ -79,6 +95,55 @@ class EntityExtractor:
                 if resolved:
                     add(resolved)
         return tables, columns
+
+    # ------------------------------------------------------------- 列过滤 / 代表列
+
+    def _drop_non_selected(self, columns, aggregates, conditions) -> list[str]:
+        """剔除只服务于聚合或 WHERE 的列，它们不应出现在 SELECT/GROUP BY。"""
+        excluded = self._aggregate_targets(aggregates) | self._condition_columns(conditions)
+        if not excluded:
+            return columns
+        return [c for c in columns if c.lower() not in excluded]
+
+    @classmethod
+    def _aggregate_targets(cls, aggregates) -> set[str]:
+        """聚合函数参数中的列名（`SUM(amount)` → `amount`；`COUNT(*)` 忽略）。"""
+        targets: set[str] = set()
+        for agg in aggregates:
+            match = cls._AGG_TARGET_PAT.match(agg.mapped or "")
+            if not match:
+                continue
+            col = match.group(1).strip()
+            if col and col != "*":
+                targets.add(col.lower())
+        return targets
+
+    @staticmethod
+    def _condition_columns(conditions) -> set[str]:
+        """WHERE 条件片段左侧的列名（`status = 'pending'` → `status`）。"""
+        columns: set[str] = set()
+        for cond in conditions:
+            head = (cond.mapped or "").split(None, 1)[0]
+            if head:
+                columns.add(head.lower())
+        return columns
+
+    def _representative_column(self, tables) -> Optional[str]:
+        """选表代表列作分组依据：name → *_name → title；无合适列返回 None。"""
+        if self._schema is None or not tables:
+            return None
+        table = self._schema.tables.get(tables[0].lower())
+        if table is None:
+            return None
+        names = list(table.columns.keys())
+        if "name" in names:
+            return "name"
+        for name in names:
+            if name.endswith(self._REPRESENTATIVE_SUFFIX):
+                return name
+        if "title" in names:
+            return "title"
+        return None
 
     # ------------------------------------------------------------------ 聚合
 

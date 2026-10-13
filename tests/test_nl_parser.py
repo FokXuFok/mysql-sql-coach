@@ -9,7 +9,7 @@ def make_schema() -> Schema:
     """构造含 customers / orders / users 三张表的测试 schema。"""
     return Schema(tables={
         "customers": TableSchema(name="customers", columns={
-            "id": "bigint", "name": "varchar", "city": "varchar",
+            "id": "bigint", "customer_name": "varchar", "city": "varchar",
             "amount": "decimal", "created_at": "datetime"}),
         "orders": TableSchema(name="orders", columns={
             "id": "bigint", "customer_id": "bigint", "status": "varchar",
@@ -43,6 +43,20 @@ def test_parse_aggregate_sum_amount_and_order_desc(parser):
     result = parser.parse("查询销售额最高的10个客户")
     assert any(a.mapped == "SUM(amount)" for a in result.aggregates)
     assert any("DESC" in o.mapped for o in result.order_by)
+
+
+def test_parse_aggregate_excludes_target_and_adds_representative(parser):
+    """例 1：SUM 的目标列 amount 不应作为查询列，补入代表列 customer_name。"""
+    result = parser.parse("查询销售额最高的10个客户")
+    assert result.columns == ["customer_name"]
+    assert [a.mapped for a in result.aggregates] == ["SUM(amount)"]
+
+
+def test_parse_condition_column_not_selected(parser):
+    """例 2：WHERE 条件里的 status 只作条件，不作为查询列。"""
+    result = parser.parse("查找status为pending的订单")
+    assert result.columns == []
+    assert [c.mapped for c in result.conditions] == ["status = 'pending'"]
 
 
 def test_parse_group_by_city(parser):

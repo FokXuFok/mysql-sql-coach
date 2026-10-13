@@ -14,7 +14,7 @@ def make_schema() -> Schema:
     """构造含 customers / orders / users 三张表的测试 schema。"""
     return Schema(tables={
         "customers": TableSchema(name="customers", columns={
-            "id": "bigint", "name": "varchar", "city": "varchar",
+            "id": "bigint", "customer_name": "varchar", "city": "varchar",
             "amount": "decimal", "created_at": "datetime"}),
         "orders": TableSchema(name="orders", columns={
             "id": "bigint", "customer_id": "bigint", "status": "varchar",
@@ -52,19 +52,19 @@ def _assert_parses(sql: str) -> None:
 # --------------------------------------------------------------------- 文档示例
 
 def test_example_top_customers_by_sales(builder, parser):
-    """示例 1：查询销售额最高的10个客户。"""
+    """示例 1：查询销售额最高的10个客户（按客户分组，而非按金额分组）。"""
     q = parser.parse("查询销售额最高的10个客户")
     sql = builder.build(q)
-    assert sql == ("SELECT amount, SUM(amount) FROM customers "
-                   "GROUP BY amount ORDER BY SUM(amount) DESC LIMIT 10;")
+    assert sql == ("SELECT customer_name, SUM(amount) FROM customers "
+                   "GROUP BY customer_name ORDER BY SUM(amount) DESC LIMIT 10;")
     _assert_parses(sql)
 
 
 def test_example_pending_orders(builder, parser):
-    """示例 2：查找status为pending的订单。"""
+    """示例 2：查找status为pending的订单（status 只作条件，不进 SELECT）。"""
     q = parser.parse("查找status为pending的订单")
     sql = builder.build(q)
-    assert sql == "SELECT status FROM orders WHERE status = 'pending';"
+    assert sql == "SELECT * FROM orders WHERE status = 'pending';"
     _assert_parses(sql)
 
 
@@ -81,6 +81,24 @@ def test_example_recent_orders(builder, parser):
     q = parser.parse("查询最近10条订单")
     sql = builder.build(q)
     assert sql == "SELECT * FROM orders ORDER BY created_at DESC LIMIT 10;"
+    _assert_parses(sql)
+
+
+@pytest.mark.parametrize("text,expected_sql", [
+    ("查询销售额最高的10个客户",
+     "SELECT customer_name, SUM(amount) FROM customers "
+     "GROUP BY customer_name ORDER BY SUM(amount) DESC LIMIT 10;"),
+    ("查找status为pending的订单",
+     "SELECT * FROM orders WHERE status = 'pending';"),
+    ("统计每个城市的用户数量",
+     "SELECT city, COUNT(*) FROM users GROUP BY city;"),
+    ("查询最近10条订单",
+     "SELECT * FROM orders ORDER BY created_at DESC LIMIT 10;"),
+])
+def test_end_to_end_examples(builder, parser, text, expected_sql):
+    """4 条示例输入经 NLParser.parse + SQLBuilder.build 后逐字符等于预期 SQL。"""
+    sql = builder.build(parser.parse(text))
+    assert sql == expected_sql
     _assert_parses(sql)
 
 
