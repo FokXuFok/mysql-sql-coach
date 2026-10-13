@@ -85,6 +85,21 @@ def test_error_signal_on_exception(qtbot):
         assert "boom" in errors[0]
 
 
+def test_close_called_even_when_generate_raises(qtbot):
+    """Minor 7：generate_sql 抛异常时仍须 close()，避免连接泄漏。"""
+    config = make_config(mock=True)
+    fake_coach = MagicMock()
+    fake_coach.connect.return_value = True
+    fake_coach.generate_sql.side_effect = RuntimeError("boom")
+
+    with patch("gui.workers.nl_worker.SQLCoach", return_value=fake_coach):
+        worker = NlWorker(text="查询10条订单", config=config)
+        with qtbot.waitSignal(worker.error, timeout=5000):
+            worker.start()
+
+        fake_coach.close.assert_called_once()
+
+
 def test_does_not_override_qthread_finished():
     """自定义信号不得叫 finished, 否则会覆盖 QThread 内置信号。"""
     assert "finished" not in NlWorker.__dict__

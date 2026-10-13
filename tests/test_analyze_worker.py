@@ -98,6 +98,21 @@ def test_error_signal_on_exception(qtbot):
         assert "boom" in errors[0]
 
 
+def test_close_called_even_when_analyze_raises(qtbot):
+    """Minor 7：analyze 抛异常时仍须 close()，避免连接泄漏。"""
+    config = make_config(mock=True)
+    fake_coach = MagicMock()
+    fake_coach.connect.return_value = True
+    fake_coach.analyze.side_effect = RuntimeError("boom")
+
+    with patch("gui.workers.analyze_worker.SQLCoach", return_value=fake_coach):
+        worker = AnalyzeWorker(sql="SELECT 1", config=config, use_cache=False)
+        with qtbot.waitSignal(worker.error, timeout=5000):
+            worker.start()
+
+        fake_coach.close.assert_called_once()
+
+
 def test_stage_changed_signal_emitted(qtbot):
     """on_stage 回调 -> 发射 stage_changed 信号。"""
     config = make_config(mock=True)

@@ -149,7 +149,7 @@ def test_analyze_error_does_not_block_ui(app, monkeypatch):
     assert win.sql_input.editor.isReadOnly() is False
     assert win._analyze_action.isEnabled() is True
 
-    box = win._message_box
+    box = win._message_boxes[-1]
     assert box is not None, "失败时应给出提示"
     assert box.windowModality() == Qt.NonModal, "提示框必须是非模态，否则会卡住主窗口"
     assert QApplication.activeModalWidget() is None
@@ -275,7 +275,7 @@ def test_nl_warnings_shown_non_modal(app, monkeypatch):
             break
         time.sleep(0.05)
 
-    box = win._message_box
+    box = win._message_boxes[-1]
     assert box is not None
     assert "未识别表名" in box.text()
     assert box.windowModality() == Qt.NonModal
@@ -313,7 +313,22 @@ def test_nl_error_restores_ui(app, monkeypatch):
 
     assert win.nl_worker is None
     assert win.nl_input.editor.isReadOnly() is False
-    box = win._message_box
+    box = win._message_boxes[-1]
     assert box is not None
     assert box.windowModality() == Qt.NonModal
     box.close()
+
+
+def test_message_boxes_retained_across_calls(app):
+    """Minor 6：连续两次提示都须保活，避免前一个弹框被 GC。"""
+    from PySide6.QtWidgets import QMessageBox
+
+    win = MainWindow(config=make_config())
+    win._show_message("提示一", "1", QMessageBox.Warning)
+    win._show_message("提示二", "2", QMessageBox.Critical)
+
+    assert len(win._message_boxes) >= 2
+    texts = [b.text() for b in win._message_boxes[-2:]]
+    assert texts == ["1", "2"]
+    for b in win._message_boxes:
+        b.close()

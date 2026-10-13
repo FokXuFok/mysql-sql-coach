@@ -155,3 +155,64 @@ def test_intent_and_raw_text_passthrough(extractor):
     q = extractor.extract(["查询", "订单"], "select")
     assert q.intent == "select"
     assert q.raw_text == "查询订单"
+
+
+# --------------------------------------------------------- 语义缺陷修复回归
+
+def test_aggregate_total_amount_per_city(extractor):
+    """Critical 1："总额" 应触发 SUM，且 city 作分组而非查询列。"""
+    q = extractor.extract(["查询", "每个", "城市", "的", "订单", "总额"], "aggregate")
+    assert [a.mapped for a in q.aggregates] == ["SUM(amount)"]
+    assert q.group_by == ["city"]
+
+
+def test_aggregate_merged_token_finds_column(extractor):
+    """Important 2：jieba 把"平均年龄"合成一个 token 时仍能取到 age。"""
+    q = extractor.extract(["查询", "用户", "的", "平均年龄"], "aggregate")
+    assert [a.mapped for a in q.aggregates] == ["AVG(age)"]
+    assert "age" not in q.columns  # 聚合目标列不得进入 SELECT / GROUP BY
+
+
+def test_aggregate_skipped_when_non_count_target_missing():
+    """Important 2：非 COUNT 聚合找不到目标列时跳过，绝不生成 SUM(*)。"""
+    ex = EntityExtractor(SchemaDictionary(Schema()))  # 空 schema
+    q = ex.extract(["查询", "销售额", "最高", "的", "10", "个", "客户"], "aggregate")
+    assert q.aggregates == []
+    assert getattr(q, "skipped_aggregates", []) == ["销售额"]
+
+
+def test_count_still_uses_star_when_target_missing(extractor):
+    """COUNT 找不到目标列时仍合法地使用 COUNT(*)。"""
+    q = extractor.extract(["统计", "用户数量"], "aggregate")
+    assert [a.mapped for a in q.aggregates] == ["COUNT(*)"]
+
+
+def test_order_recent_prefers_time_column_over_first_column(extractor):
+    """Important 3："最近" 排序优先取时间列，而非 columns[0]。"""
+    q = extractor.extract(["查询", "最近", "10", "个", "用户", "的", "名称"], "select")
+    assert q.order_by[0].mapped == "created_at DESC"
+
+
+def test_condition_value_with_wan_unit(extractor):
+    """Important 4："1万" 应换算为 10000。"""
+    q = extractor.extract(["查询", "销售额", "超过", "1", "万", "的", "客户"], "select")
+    assert [c.mapped for c in q.conditions] == ["amount > 10000"]
+
+
+def test_condition_value_with_unit_in_single_token(extractor):
+    """Important 4：jieba 未拆开"1万"时也应换算。"""
+    q = extractor.extract(["查询", "销售额", "超过", "1万", "的", "客户"], "select")
+    assert [c.mapped for c in q.conditions] == ["amount > 10000"]
+
+
+def test_condition_quoted_literal_keeps_full_value(extractor):
+    """Important 5：带引号的字面量取引号内完整内容（含内部单引号）。"""
+    q = extractor.extract(
+        ["查找", "name", "为", "'", "O", "'", "Brien", "'", "的", "用户"], "select")
+    assert [c.mapped for c in q.conditions] == ["name = 'O'Brien'"]
+
+
+def test_condition_plain_literal_unchanged(extractor):
+    """Important 5：无引号的简单值仍按单 token 处理。"""
+    q = extractor.extract(["查找", "status", "为", "pending", "的", "订单"], "select")
+    assert [c.mapped for c in q.conditions] == ["status = 'pending'"]

@@ -1,7 +1,11 @@
 """基于关键词的意图识别：select / aggregate / count。"""
+from .extractor import EntityExtractor
 
+# aggregate 关键词直接派生自 `EntityExtractor.AGGREGATE_MAP` 的键，
+# 确保"能触发聚合函数的关键词"与"判为聚合意图的关键词"始终一致，
+# 避免两处各自维护导致聚合被静默丢弃（如"总额/总计/均值"）。
 INTENT_KEYWORDS = {
-    "aggregate": ["最高", "最低", "平均", "总和", "总数", "统计", "多少", "销售额", "数量"],
+    "aggregate": list(EntityExtractor.AGGREGATE_MAP.keys()),
     "count":     ["多少条", "几条", "数量", "计数"],
     "select":    ["查询", "查找", "找", "列出", "显示", "获取", "看看"],
 }

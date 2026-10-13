@@ -41,11 +41,14 @@ class NlWorker(QThread):
 
     def run(self) -> None:
         """线程入口: 创建 SQLCoach, 调 generate_sql, close。"""
+        coach = None
         try:
             coach = SQLCoach(self.config, use_cache=False)
             coach.connect()
             result = coach.generate_sql(self.text, execute=True, verify=True)
-            coach.close()
             self.nl_done.emit(result)
         except Exception as e:
             self.error.emit(str(e))
+        finally:
+            if coach is not None:
+                coach.close()

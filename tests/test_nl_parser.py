@@ -83,3 +83,45 @@ def test_parse_empty_schema_does_not_crash():
     result = NLParser(Schema()).parse("查询10条订单")
     assert result.limit == 10
     assert result.tables == []
+
+
+# --------------------------------------------------------- 语义缺陷修复回归
+
+def test_parse_total_amount_is_aggregate(parser):
+    """Critical 1：'订单总额' 应识别为 aggregate 并产出 SUM(amount)。"""
+    result = parser.parse("查询每个城市的订单总额")
+    assert result.intent == "aggregate"
+    assert any(a.mapped == "SUM(amount)" for a in result.aggregates)
+
+
+def test_parse_average_age_is_avg_not_star(parser):
+    """Important 2：'平均年龄' 合成词应产出 AVG(age)，绝不能是 AVG(*)。"""
+    result = parser.parse("查询用户的平均年龄")
+    assert any(a.mapped == "AVG(age)" for a in result.aggregates)
+    assert all(a.mapped != "AVG(*)" for a in result.aggregates)
+    assert "age" not in result.columns
+
+
+def test_parse_empty_schema_skips_non_count_star_aggregate():
+    """Important 2：空 schema 下非 COUNT 聚合不得生成 SUM(*)。"""
+    result = NLParser(Schema()).parse("查询销售额最高的10个客户")
+    assert result.aggregates == []
+    assert getattr(result, "skipped_aggregates", []) == ["销售额"]
+
+
+def test_parse_recent_users_orders_by_time_column(parser):
+    """Important 3：'最近' 排序按时间列而非查询列。"""
+    result = parser.parse("查询最近10个用户的名称")
+    assert any(o.mapped == "created_at DESC" for o in result.order_by)
+
+
+def test_parse_condition_with_wan_unit(parser):
+    """Important 4：'超过1万' 的值应为 10000。"""
+    result = parser.parse("查询销售额超过1万的客户")
+    assert any("10000" in c.mapped for c in result.conditions)
+
+
+def test_parse_quoted_literal_condition(parser):
+    """Important 5：带引号字面量保留完整内容（内部引号由 mapper 转义）。"""
+    result = parser.parse("查找name为'O'Brien'的用户")
+    assert [c.mapped for c in result.conditions] == ["name = 'O'Brien'"]

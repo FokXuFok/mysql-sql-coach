@@ -61,3 +61,20 @@ def test_ambiguous_duo_shao_tiao_is_count():
 def test_intent_keywords_shape():
     assert set(INTENT_KEYWORDS) == {"aggregate", "count", "select"}
     assert all(isinstance(v, list) for v in INTENT_KEYWORDS.values())
+
+
+def test_aggregate_keywords_derived_from_aggregate_map():
+    """aggregate 关键词必须从 AGGREGATE_MAP 的键派生，避免两处漂移。"""
+    from sql_coach.nl.extractor import EntityExtractor
+
+    assert set(INTENT_KEYWORDS["aggregate"]) == set(EntityExtractor.AGGREGATE_MAP)
+
+
+@pytest.mark.parametrize("tokens", [
+    ["查询", "每个", "城市", "的", "订单", "总额"],
+    ["总计"],
+    ["均值"],
+])
+def test_aggregate_intent_covers_map_only_keywords(tokens):
+    """总额 / 总计 / 均值 只存在于 AGGREGATE_MAP，也应判为 aggregate。"""
+    assert IntentRecognizer().recognize(tokens) == "aggregate"

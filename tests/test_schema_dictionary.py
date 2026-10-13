@@ -104,3 +104,22 @@ def test_cn_synonyms_covers_required_terms():
         assert term in CN_SYNONYMS, f"CN_SYNONYMS 缺少 {term}"
         assert isinstance(CN_SYNONYMS[term], list)
         assert CN_SYNONYMS[term], f"{term} 的候选列表不应为空"
+
+
+def test_cn_synonyms_covers_extended_terms():
+    """Minor 9：补充的常用同义词都应存在。"""
+    for term in ["顾客", "姓名", "会员", "买家", "价格", "单价",
+                 "手机号", "手机", "分类", "类型", "库存", "地址", "性别", "生日"]:
+        assert term in CN_SYNONYMS, f"CN_SYNONYMS 缺少 {term}"
+        assert isinstance(CN_SYNONYMS[term], list)
+        assert CN_SYNONYMS[term], f"{term} 的候选列表不应为空"
+
+
+def test_resolve_extended_chinese_synonyms():
+    d = SchemaDictionary(make_schema())
+    assert d.resolve("顾客") == "customers"
+    assert d.resolve("姓名") == "name"
+    assert d.resolve("会员") == "name"
+    assert d.resolve("买家") == "name"
+    assert d.resolve("手机号") == "phone"
+    assert d.resolve("手机") == "phone"

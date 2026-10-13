@@ -244,3 +244,52 @@ def test_all_examples_parse_with_sqlparse(builder, parser, text):
     sql = builder.build(parser.parse(text))
     assert sql.endswith(";")
     _assert_parses(sql)
+
+
+# --------------------------------------------------------- 语义缺陷修复回归
+
+def test_example_total_amount_per_city(builder, parser):
+    """Critical 1：'查询每个城市的订单总额' 必须含 SUM(amount)。"""
+    sql = builder.build(parser.parse("查询每个城市的订单总额"))
+    assert "SUM(amount)" in sql
+    _assert_parses(sql)
+
+
+def test_example_average_age(builder, parser):
+    """Important 2：'查询用户的平均年龄' 必须含 AVG(age) 且不含 AVG(*)。"""
+    sql = builder.build(parser.parse("查询用户的平均年龄"))
+    assert "AVG(age)" in sql
+    assert "AVG(*)" not in sql
+    assert "GROUP BY age" not in sql
+    _assert_parses(sql)
+
+
+def test_empty_schema_never_emits_star_aggregate(builder):
+    """Important 2：空 schema 下宁可退化为 SELECT *，也不生成 SUM(*)。"""
+    sql = builder.build(NLParser(Schema()).parse("查询销售额最高的10个客户"))
+    assert "SUM(*)" not in sql
+    assert "AVG(*)" not in sql
+    assert "MAX(*)" not in sql
+    assert "MIN(*)" not in sql
+    _assert_parses(sql)
+
+
+def test_example_recent_users_order_by_time(builder, parser):
+    """Important 3：'查询最近10个用户的名称' 按 created_at 排序。"""
+    sql = builder.build(parser.parse("查询最近10个用户的名称"))
+    assert "ORDER BY created_at DESC" in sql
+    _assert_parses(sql)
+
+
+def test_example_quoted_literal_escaped(builder, parser):
+    """Important 5：带引号字面量正确转义。"""
+    sql = builder.build(parser.parse("查找name为'O'Brien'的用户"))
+    assert sql == "SELECT * FROM users WHERE name = 'O''Brien';"
+    _assert_parses(sql)
+
+
+def test_example_wan_unit_in_where(builder, parser):
+    """Important 4：WHERE 里的值应为 10000。"""
+    sql = builder.build(parser.parse("查询销售额超过1万的客户"))
+    assert "10000" in sql
+    _assert_parses(sql)

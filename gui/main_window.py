@@ -50,6 +50,8 @@ class MainWindow(QMainWindow):
         self.nl_worker: Optional[NlWorker] = None
         self.last_report: Optional[Report] = None
         self._analyze_start_time: float = 0.0
+        # 非模态提示框保活列表：同时弹出多个时，避免前一个被 GC
+        self._message_boxes: list[QMessageBox] = []
 
         self.setWindowTitle("SQL Coach")
         self.resize(1200, 800)
@@ -217,7 +219,9 @@ class MainWindow(QMainWindow):
         box.setIcon(icon)
         box.setWindowModality(Qt.NonModal)
         box.setModal(False)
-        self._message_box = box  # 保持引用, 防止被 GC
+        # 保存到列表（保留最近 5 个），防止同时弹出多个时前面的被 GC
+        self._message_boxes.append(box)
+        self._message_boxes = self._message_boxes[-5:]
         box.show()
 
     def _on_analyze(self) -> None:

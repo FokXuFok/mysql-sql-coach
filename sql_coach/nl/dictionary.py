@@ -9,6 +9,7 @@ from ..local.schema import Schema
 CN_SYNONYMS: dict[str, list[str]] = {
     # 表
     "客户": ["customer", "customers", "client", "clients"],
+    "顾客": ["customer", "customers", "client"],
     "用户": ["user", "users"],
     "订单": ["order", "orders"],
     "商品": ["product", "products", "item", "items"],
@@ -19,10 +20,15 @@ CN_SYNONYMS: dict[str, list[str]] = {
     "状态": ["status", "state"],
     "名称": ["name"],
     "名字": ["name"],
+    "姓名": ["name"],
+    "会员": ["name"],
+    "买家": ["name"],
     "数量": ["count", "qty", "quantity", "num"],
     "金额": ["amount", "total", "price", "sum", "money"],
     "销售额": ["amount", "total", "price", "sum", "money"],
     "总额": ["amount", "total", "price", "sum", "money"],
+    "价格": ["price", "unit_price"],
+    "单价": ["price", "unit_price"],
     "时间": ["created_at", "date", "time", "created_time"],
     "日期": ["created_at", "date", "time", "created_time"],
     "编号": ["id"],
@@ -30,6 +36,14 @@ CN_SYNONYMS: dict[str, list[str]] = {
     "年龄": ["age"],
     "邮箱": ["email", "mail"],
     "电话": ["phone", "tel", "mobile"],
+    "手机号": ["phone", "mobile", "tel"],
+    "手机": ["phone", "mobile", "tel"],
+    "分类": ["category", "type", "kind"],
+    "类型": ["category", "type", "kind"],
+    "库存": ["stock", "inventory"],
+    "地址": ["address", "addr"],
+    "性别": ["gender", "sex"],
+    "生日": ["birthday", "birth_date"],
 }
 
 

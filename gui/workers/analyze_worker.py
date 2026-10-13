@@ -57,6 +57,7 @@ class AnalyzeWorker(QThread):
 
     def run(self) -> None:
         """线程入口: 创建 SQLCoach, 调 analyze, close。"""
+        coach = None
         try:
             coach = SQLCoach(self.config, use_cache=self.use_cache)
             coach.connect()
@@ -67,7 +68,9 @@ class AnalyzeWorker(QThread):
                     self.stage_changed.emit(stage)
 
             report = coach.analyze(self.sql, on_stage=on_stage)
-            coach.close()
             self.analysis_done.emit(report)
         except Exception as e:
             self.error.emit(str(e))
+        finally:
+            if coach is not None:
+                coach.close()

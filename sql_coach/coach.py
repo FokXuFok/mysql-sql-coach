@@ -212,7 +212,7 @@ class SQLCoach:
             warnings = [p.description for p in analysis.problems]
 
         # 5. 表名识别失败提示
-        if not nl_query.tables or "unknown_table" in nl_query.tables:
+        if not nl_query.tables:
             warnings.append(
                 "未能识别表名，已使用 unknown_table 占位，请补充表名或检查数据库 schema。")
 
