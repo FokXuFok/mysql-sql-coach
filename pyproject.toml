@@ -19,6 +19,7 @@ dependencies = [
     "httpx>=0.25",
     "python-dotenv>=1.0",
     "pyperclip>=1.8",
+    "jieba>=0.42",
 ]
 
 [project.optional-dependencies]
