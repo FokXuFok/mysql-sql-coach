@@ -108,3 +108,54 @@ def test_config_from_env_optimizer_override(monkeypatch):
     config = Config.from_env()
     assert config.optimizer_mode == "local"
     assert config.complexity_threshold == 5
+
+
+def test_nl_entity_defaults():
+    from sql_coach.models import NLEntity
+    e = NLEntity(type="table", raw="客户", mapped="customers")
+    assert e.type == "table"
+    assert e.raw == "客户"
+    assert e.mapped == "customers"
+    assert e.alias == ""
+
+
+def test_nl_query_defaults():
+    from sql_coach.models import NLQuery
+    q = NLQuery(intent="select", tables=["orders"], columns=[],
+                conditions=[], aggregates=[], order_by=[], group_by=[])
+    assert q.intent == "select"
+    assert q.limit is None
+    assert q.raw_text == ""
+
+
+def test_nl_query_full_fields():
+    from sql_coach.models import NLQuery, NLEntity
+    agg = NLEntity(type="aggregate", raw="销售额", mapped="SUM(amount)", alias="销售额")
+    q = NLQuery(intent="aggregate", tables=["customers"], columns=["name"],
+                conditions=[], aggregates=[agg], order_by=[], group_by=["name"],
+                limit=10, raw_text="查询销售额最高的10个客户")
+    assert q.aggregates[0].mapped == "SUM(amount)"
+    assert q.limit == 10
+    assert q.raw_text == "查询销售额最高的10个客户"
+
+
+def test_nl_query_result_defaults():
+    from sql_coach.models import NLQuery, NLQueryResult
+    q = NLQuery(intent="select", tables=["orders"], columns=[],
+                conditions=[], aggregates=[], order_by=[], group_by=[])
+    r = NLQueryResult(nl_query=q, generated_sql="SELECT * FROM orders;")
+    assert r.columns == []
+    assert r.rows == []
+    assert r.warnings == []
+    assert r.executed is False
+    assert r.error == ""
+
+
+def test_nl_query_result_lists_are_independent():
+    from sql_coach.models import NLQuery, NLQueryResult
+    q = NLQuery(intent="select", tables=[], columns=[],
+                conditions=[], aggregates=[], order_by=[], group_by=[])
+    a = NLQueryResult(nl_query=q, generated_sql="a")
+    b = NLQueryResult(nl_query=q, generated_sql="b")
+    a.columns.append("x")
+    assert b.columns == []

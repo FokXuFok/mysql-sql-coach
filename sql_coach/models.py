@@ -104,6 +104,41 @@ class DBConfig:
 
 
 @dataclass
+class NLEntity:
+    """从自然语言中提取的一个实体。"""
+    type: str        # table / column / condition / aggregate / order / limit / value
+    raw: str         # 原始文本
+    mapped: str      # 映射后的 SQL 片段（如表名、列名）
+    alias: str = ""  # 别名（如"销售额" → SUM(amount)）
+
+
+@dataclass
+class NLQuery:
+    """自然语言解析结果。"""
+    intent: str                 # select / aggregate / count
+    tables: list[str]           # 识别到的表名
+    columns: list[str]          # 显式列名（"查询name和age" → ["name", "age"]）
+    conditions: list[NLEntity]  # WHERE 条件
+    aggregates: list[NLEntity]  # 聚合函数（"销售额" → SUM(amount)）
+    order_by: list[NLEntity]    # 排序（"最高的" → ORDER BY ... DESC）
+    group_by: list[str]         # 分组列
+    limit: Optional[int] = None  # LIMIT 值
+    raw_text: str = ""           # 原始自然语言
+
+
+@dataclass
+class NLQueryResult:
+    """NL→SQL 模式的最终输出。"""
+    nl_query: NLQuery                 # 解析结果
+    generated_sql: str                # 生成的 SQL
+    columns: list[str] = field(default_factory=list)   # 结果列名
+    rows: list[tuple] = field(default_factory=list)    # 结果行数据
+    warnings: list[str] = field(default_factory=list)  # 警告信息
+    executed: bool = False            # 是否执行了查询
+    error: str = ""                   # 执行错误
+
+
+@dataclass
 class Config:
     db: DBConfig
     model: str
