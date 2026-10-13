@@ -180,6 +180,56 @@ def doctor(fix, probe):
     console.print(format_results(results))
 
 
+@main.command()
+@click.argument("query")
+@click.option("--execute/--no-execute", default=True, help="是否执行生成的 SQL")
+@click.option("--mock", is_flag=True, default=False, help="模拟模式（不连数据库）")
+def nl2sql(query, execute, mock):
+    """自然语言转 SQL：输入中文描述，生成并（可选）执行 SQL。"""
+    from rich.table import Table
+
+    config = load_config(mock=mock)
+
+    coach = SQLCoach(config, use_cache=False)
+    if not config.mock:
+        if not coach.connect():
+            console.print("[yellow]\u2717 数据库连接失败，切换到模拟模式[/yellow]")
+            config.mock = True
+            coach = SQLCoach(config, use_cache=False)
+    try:
+        result = coach.generate_sql(query, execute=execute, verify=True)
+    finally:
+        coach.close()
+
+    # 解析结果
+    nq = result.nl_query
+    console.print(f"[bold]意图[/bold]: {nq.intent}")
+    console.print(f"[bold]识别表[/bold]: {', '.join(nq.tables) or '(未识别)'}")
+    console.print(f"[bold]生成的 SQL[/bold]:")
+    console.print(f"[cyan]{result.generated_sql}[/cyan]")
+
+    # 警告
+    for warning in result.warnings:
+        console.print(f"[yellow]\u26a0 {warning}[/yellow]")
+
+    # 执行错误（打印但不抛异常）
+    if result.error:
+        console.print(f"[red]\u2717 执行错误: {result.error}[/red]")
+
+    # 结果表格
+    if result.executed:
+        table = Table(title=f"查询结果（共 {len(result.rows)} 行）")
+        for col in result.columns:
+            table.add_column(str(col))
+        for row in result.rows[:50]:
+            table.add_row(*[str(v) for v in row])
+        console.print(table)
+        if len(result.rows) > 50:
+            console.print(f"[dim]仅显示前 50 行，共 {len(result.rows)} 行[/dim]")
+    elif not result.error:
+        console.print("[dim]（未执行 SQL：模拟模式或已禁用执行）[/dim]")
+
+
 @main.group()
 def cache():
     """缓存管理。"""

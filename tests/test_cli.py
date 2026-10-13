@@ -216,3 +216,165 @@ def test_interactive_banner_is_neutral():
     src = inspect.getsource(interactive.run_cli)
     assert "AI 慢查询优化教练" not in src
     assert "慢查询优化教练" in src
+
+
+# --------------------------------------------------------------------- nl2sql 子命令
+
+
+def _nl_result(**kwargs):
+    """构造 NLQueryResult，便于 CLI 测试。"""
+    from sql_coach.models import NLQuery, NLQueryResult
+    nq = NLQuery(intent="select", tables=["orders"], columns=[], conditions=[],
+                 aggregates=[], order_by=[], group_by=[], limit=10,
+                 raw_text="查询10条订单")
+    base = dict(nl_query=nq, generated_sql="SELECT * FROM orders LIMIT 10;")
+    base.update(kwargs)
+    return NLQueryResult(**base)
+
+
+def test_cli_has_nl2sql_command():
+    runner = CliRunner()
+    result = runner.invoke(main, ["nl2sql", "--help"])
+    assert result.exit_code == 0
+    assert "--execute" in result.output
+    assert "--mock" in result.output
+
+
+def test_cli_nl2sql_mock_mode():
+    runner = CliRunner()
+    with patch("sql_coach.cli.SQLCoach") as coach_cls:
+        coach = MagicMock()
+        coach.connect.return_value = True
+        coach.generate_sql.return_value = _nl_result()
+        coach_cls.return_value = coach
+
+        result = runner.invoke(main, ["nl2sql", "查询10条订单", "--mock"])
+
+    assert result.exit_code == 0
+    assert "SELECT * FROM orders LIMIT 10;" in result.output
+    assert "orders" in result.output
+    assert coach.generate_sql.called
+
+
+def test_cli_nl2sql_passes_execute_flag():
+    runner = CliRunner()
+    with patch("sql_coach.cli.SQLCoach") as coach_cls:
+        coach = MagicMock()
+        coach.connect.return_value = True
+        coach.generate_sql.return_value = _nl_result()
+        coach_cls.return_value = coach
+
+        result = runner.invoke(main, ["nl2sql", "查询10条订单", "--no-execute", "--mock"])
+
+    assert result.exit_code == 0
+    assert coach.generate_sql.call_args.kwargs.get("execute") is False
+
+
+def test_cli_nl2sql_prints_result_table():
+    runner = CliRunner()
+    with patch("sql_coach.cli.SQLCoach") as coach_cls:
+        coach = MagicMock()
+        coach.connect.return_value = True
+        coach.generate_sql.return_value = _nl_result(
+            generated_sql="SELECT city, COUNT(*) FROM users GROUP BY city;",
+            columns=["city", "cnt"], rows=[("北京", 3), ("上海", 2)], executed=True)
+        coach_cls.return_value = coach
+
+        result = runner.invoke(main, ["nl2sql", "统计每个城市的用户数量", "--mock"])
+
+    assert result.exit_code == 0
+    assert "北京" in result.output
+    assert "cnt" in result.output
+
+
+def test_cli_nl2sql_caps_rows_at_50():
+    runner = CliRunner()
+    rows = [(f"name{i}", i) for i in range(55)]
+    with patch("sql_coach.cli.SQLCoach") as coach_cls:
+        coach = MagicMock()
+        coach.connect.return_value = True
+        coach.generate_sql.return_value = _nl_result(
+            columns=["name", "n"], rows=rows, executed=True)
+        coach_cls.return_value = coach
+
+        result = runner.invoke(main, ["nl2sql", "查询所有订单", "--mock"])
+
+    assert result.exit_code == 0
+    assert "55" in result.output  # 总数提示
+
+
+def test_cli_nl2sql_prints_error_without_raising():
+    runner = CliRunner()
+    with patch("sql_coach.cli.SQLCoach") as coach_cls:
+        coach = MagicMock()
+        coach.connect.return_value = True
+        coach.generate_sql.return_value = _nl_result(
+            generated_sql="SELECT * FROM unknown_table;", error="Table 'unknown_table' doesn't exist")
+        coach_cls.return_value = coach
+
+        result = runner.invoke(main, ["nl2sql", "查询订单", "--mock"])
+
+    assert result.exit_code == 0
+    assert "doesn't exist" in result.output
+
+
+def test_cli_nl2sql_prints_warnings():
+    runner = CliRunner()
+    with patch("sql_coach.cli.SQLCoach") as coach_cls:
+        coach = MagicMock()
+        coach.connect.return_value = True
+        coach.generate_sql.return_value = _nl_result(warnings=["未能识别表名"])
+        coach_cls.return_value = coach
+
+        result = runner.invoke(main, ["nl2sql", "查询订单", "--mock"])
+
+    assert result.exit_code == 0
+    assert "未能识别表名" in result.output
+
+
+# --------------------------------------------------------------------- 交互模式 NL 入口
+
+
+def test_interactive_nl_one_prints_sql(capsys):
+    from unittest.mock import MagicMock
+    from sql_coach.interactive import nl_one
+    from sql_coach.models import NLQuery, NLQueryResult
+
+    coach = MagicMock()
+    coach.generate_sql.return_value = NLQueryResult(
+        nl_query=NLQuery(intent="select", tables=["orders"], columns=[],
+                         conditions=[], aggregates=[], order_by=[],
+                         group_by=[], limit=10, raw_text="查询10条订单"),
+        generated_sql="SELECT * FROM orders LIMIT 10;",
+    )
+    nl_one(coach, "查询10条订单")
+    out = capsys.readouterr().out
+    assert "SELECT * FROM orders LIMIT 10;" in out
+    assert "orders" in out
+
+
+def test_interactive_nl_prefix_routes_to_generate_sql():
+    from unittest.mock import MagicMock, patch
+    from sql_coach import interactive
+    from sql_coach.models import Config, DBConfig, NLQuery, NLQueryResult
+
+    config = Config(db=DBConfig("h", 3306, "u", "p", "d"), model="deepseek",
+                    deepseek_api_key="", openai_api_key="", ollama_url="http://x",
+                    benchmark_runs=3, mock=True)
+    coach = MagicMock()
+    coach.connect.return_value = True
+    coach.generate_sql.return_value = NLQueryResult(
+        nl_query=NLQuery(intent="select", tables=["orders"], columns=[],
+                         conditions=[], aggregates=[], order_by=[],
+                         group_by=[], limit=10, raw_text="查询10条订单"),
+        generated_sql="SELECT * FROM orders LIMIT 10;",
+    )
+    inputs = iter(["/nl 查询10条订单", "q"])
+    with patch.object(interactive, "load_config", return_value=config), \
+         patch.object(interactive, "SQLCoach", return_value=coach), \
+         patch.object(interactive.console, "input",
+                      side_effect=lambda *a, **k: next(inputs)):
+        interactive.run_cli()
+
+    assert coach.generate_sql.called
+    assert coach.generate_sql.call_args[0][0] == "查询10条订单"
