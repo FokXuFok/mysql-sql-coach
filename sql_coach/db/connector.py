@@ -18,6 +18,9 @@ class DBConnector:
     def __init__(self, config: DBConfig):
         self.config = config
         self._conn: Optional[pymysql.Connection] = None
+        # 最近一次连接失败的原因。GUI 无法看到 logger 输出，必须能把它显示出来，
+        # 否则"数据库连接失败"对用户就是一句没有线索的提示。
+        self.last_error: str = ""
 
     def connect(self) -> bool:
         """Establish connection. Returns True on success, False on failure."""
@@ -30,10 +33,12 @@ class DBConnector:
                 database=self.config.database,
                 charset="utf8mb4",
             )
+            self.last_error = ""
             return True
         except Exception as e:
             logger.error(f"Database connection failed: {e}")
             self._conn = None
+            self.last_error = str(e)
             return False
 
     def is_connected(self) -> bool:

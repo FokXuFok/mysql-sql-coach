@@ -59,8 +59,15 @@ def _get_env_bool(key: str, default: bool = False) -> bool:
     return val.strip().lower() in ("1", "true", "yes", "on")
 
 
-def load_env_file(path: str = ".env") -> None:
-    """Load .env file into os.environ without overwriting existing vars."""
+def load_env_file(path: str = ".env", override: bool = False) -> None:
+    """Load .env file into os.environ.
+
+    Args:
+        override: True 时用 .env 的值覆盖已存在的环境变量。设置对话框把配置写回
+            .env 后需要重新读取才能生效，此时必须 override=True——否则会被
+            "只填新键、不覆盖旧值"的逻辑挡住，表现为"设置里改了要重启才生效"。
+            默认 False，保持启动时不覆盖真实环境变量的既有行为。
+    """
     try:
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
@@ -72,13 +79,22 @@ def load_env_file(path: str = ".env") -> None:
                 key, _, value = line.partition("=")
                 key = key.strip()
                 value = value.strip().strip('"').strip("'")
-                if key and key not in os.environ:
+                if key and (override or key not in os.environ):
                     os.environ[key] = value
     except FileNotFoundError:
         pass
 
 
-def load_config(env_path: str = ".env", mock: bool = False) -> Config:
-    """Load configuration from .env file and environment variables."""
-    load_env_file(env_path)
+def load_config(
+    env_path: str = ".env",
+    mock: bool = False,
+    override_env: bool = False,
+) -> Config:
+    """Load configuration from .env file and environment variables.
+
+    Args:
+        override_env: True 时 .env 的值覆盖已有环境变量，用于配置保存后重载，
+            使新设置立即生效而无需重启程序。
+    """
+    load_env_file(env_path, override=override_env)
     return Config.from_env(mock=mock)

@@ -1,6 +1,6 @@
-﻿# tests/test_config.py
+# tests/test_config.py
 import os
-from sql_coach.config import Config, DBConfig
+from sql_coach.config import Config, DBConfig, load_config, load_env_file
 
 
 def test_config_from_env(monkeypatch):
@@ -86,3 +86,46 @@ def test_get_env_bool_helper(monkeypatch):
     assert _get_env_bool("X_FLAG", default=True) is False
     monkeypatch.delenv("X_FLAG", raising=False)
     assert _get_env_bool("X_FLAG", default=True) is True
+
+
+def test_load_env_file_default_does_not_override(monkeypatch, tmp_path):
+    """默认不覆盖已存在的环境变量（保持启动时的既有行为）。"""
+    monkeypatch.setenv("SQLCOACH_TMP_KEY", "from_env")
+    env_file = tmp_path / "t.env"
+    env_file.write_text("SQLCOACH_TMP_KEY=from_file\n", encoding="utf-8")
+
+    load_env_file(str(env_file))
+
+    assert os.environ["SQLCOACH_TMP_KEY"] == "from_env"
+
+
+def test_load_env_file_override_replaces_existing(monkeypatch, tmp_path):
+    """override=True 时用 .env 的值覆盖已有环境变量。"""
+    monkeypatch.setenv("SQLCOACH_TMP_KEY", "from_env")
+    env_file = tmp_path / "t.env"
+    env_file.write_text("SQLCOACH_TMP_KEY=from_file\n", encoding="utf-8")
+
+    load_env_file(str(env_file), override=True)
+
+    assert os.environ["SQLCOACH_TMP_KEY"] == "from_file"
+
+
+def test_saved_setting_applies_without_restart(monkeypatch, tmp_path):
+    """回归测试：设置对话框保存到 .env 后重新加载必须立即生效，无需重启程序。
+
+    这正是「第 4 幕在设置里勾选索引实测，右侧却没有实测结果」的根因：
+    load_env_file 默认不覆盖已有环境变量，启动时读进来的旧值把新值挡住了。
+    主窗口保存配置后走的是 override_env=True 这条路径。
+    """
+    monkeypatch.delenv("MEASURE_INDEX", raising=False)
+    env_file = tmp_path / "t.env"
+    env_file.write_text("MEASURE_INDEX=false\n", encoding="utf-8")
+    assert load_config(env_path=str(env_file)).measure_index is False
+
+    # 模拟设置对话框把勾选结果写回 .env
+    env_file.write_text("MEASURE_INDEX=true\n", encoding="utf-8")
+
+    # 旧路径（不加 override）读不到新值——这就是原来的 bug
+    assert load_config(env_path=str(env_file)).measure_index is False
+    # 新路径（设置保存后重载走这条）：新值立即生效
+    assert load_config(env_path=str(env_file), override_env=True).measure_index is True

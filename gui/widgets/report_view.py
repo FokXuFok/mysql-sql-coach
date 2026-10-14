@@ -1,11 +1,15 @@
 # gui/widgets/report_view.py
 """报告容器, QScrollArea 子类。
 
-内部组装: EXPLAIN 表格 + 问题列表 + 优化 SQL + 索引 DDL + 性能图表。
+内部组装: EXPLAIN 表格 + 问题列表 + 优化 SQL + 索引 DDL + 性能图表 + 索引实测。
+
+容错: 每个章节单独渲染，某一节失败（例如打包环境下图表依赖异常）只会在该位置
+显示一条错误提示，**不会让后面的章节（尤其是「索引实测」）一起消失**。
 """
 from __future__ import annotations
 
-from typing import Optional
+import logging
+from typing import Callable, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -20,6 +24,8 @@ from sql_coach.models import Problem
 from .explain_table import ExplainTableWidget
 # 注意: benchmark_chart 故意不在顶部导入, 避免启动时加载 matplotlib/numpy/PIL
 # (省 ~2-3 秒启动时间). 仅在首次渲染报告时延迟导入.
+
+logger = logging.getLogger(__name__)
 
 # 严重度图标
 _SEVERITY_ICONS = {
@@ -88,6 +94,29 @@ class ReportView(QScrollArea):
         )
         label.setWordWrap(True)
         return label
+
+    def _section_error_label(self, name: str, exc: BaseException) -> QLabel:
+        """某一节渲染失败时的占位提示（而不是让整份报告残缺）。"""
+        label = QLabel(f"⚠️ 本节渲染失败（{name}）：{type(exc).__name__}: {exc}")
+        label.setWordWrap(True)
+        label.setStyleSheet(
+            "color: #d20f39; background: #fde2e0; padding: 8px 10px; "
+            "border-radius: 4px;"
+        )
+        return label
+
+    def _add_section(self, builder: Callable[..., Optional[QWidget]],
+                     *args) -> None:
+        """渲染单个章节并加入布局；失败则显示错误占位，绝不中断后续章节。"""
+        try:
+            widget = builder(*args)
+        except Exception as e:  # noqa: BLE001 - 单节失败不能拖垮整份报告
+            logger.exception("报告章节渲染失败: %s",
+                             getattr(builder, "__name__", builder))
+            widget = self._section_error_label(
+                getattr(builder, "__name__", "section").lstrip("_build_"), e)
+        if widget is not None:
+            self._layout.addWidget(widget)
 
     def _build_problems_section(self, problems: list[Problem]) -> Optional[QWidget]:
         """问题列表章节, 无问题返回 None。"""
@@ -178,6 +207,19 @@ class ReportView(QScrollArea):
         layout.addWidget(self._code_block("\n".join(lines)))
         return frame
 
+    def _build_explain_table(self, report: Report) -> QWidget:
+        """执行计划表格（单独成节，便于隔离渲染失败）。"""
+        table = ExplainTableWidget()
+        table.set_explain(report.explain)
+        return table
+
+    def _build_explanation(self, text: str) -> QWidget:
+        """解释说明正文。"""
+        expl = QLabel(text)
+        expl.setWordWrap(True)
+        expl.setStyleSheet("padding: 8px; background: #f5f5f5; border-radius: 4px;")
+        return expl
+
     def _engine_badge(self, report) -> QLabel:
         """引擎 / 复杂度徽章。"""
         engine = "本地规则" if report.engine_used == "local" else report.engine_used
@@ -193,55 +235,46 @@ class ReportView(QScrollArea):
 
     # ---- 公共 API ----
     def set_report(self, report: Report) -> None:
-        """渲染完整报告。"""
+        """渲染完整报告。
+
+        每个章节独立渲染（见 :meth:`_add_section`）：某一节失败不会影响后续章节，
+        因此「索引实测」不会因为「性能对比」图表出问题而消失。
+        """
         self._clear_layout()
 
         # 引擎 / 复杂度徽章
-        self._layout.addWidget(self._engine_badge(report))
+        self._add_section(lambda: self._engine_badge(report))
 
         # 原始 SQL
-        self._layout.addWidget(self._section_label("📝 原始 SQL"))
-        self._layout.addWidget(self._code_block(report.sql_info.raw_sql))
+        self._add_section(lambda: self._section_label("📝 原始 SQL"))
+        self._add_section(lambda: self._code_block(report.sql_info.raw_sql))
 
         # 执行计划
         if report.explain and report.explain.rows:
-            self._layout.addWidget(self._section_label("📋 执行计划"))
-            table = ExplainTableWidget()
-            table.set_explain(report.explain)
-            self._layout.addWidget(table)
+            self._add_section(lambda: self._section_label("📋 执行计划"))
+            self._add_section(self._build_explain_table, report)
 
         # 问题列表
-        problems_widget = self._build_problems_section(report.analysis.problems)
-        if problems_widget is not None:
-            self._layout.addWidget(problems_widget)
+        self._add_section(self._build_problems_section, report.analysis.problems)
 
         # 优化后 SQL
-        self._layout.addWidget(self._section_label("✅ 优化后 SQL"))
-        self._layout.addWidget(self._code_block(report.analysis.optimized_sql))
+        self._add_section(lambda: self._section_label("✅ 优化后 SQL"))
+        self._add_section(lambda: self._code_block(report.analysis.optimized_sql))
 
         # 索引建议
-        index_widget = self._build_index_section(report.analysis.index_ddls)
-        if index_widget is not None:
-            self._layout.addWidget(index_widget)
+        self._add_section(self._build_index_section, report.analysis.index_ddls)
 
         # 解释说明（按引擎动态显示标题）
         if report.analysis.explanation:
             title = "📋 本地规则说明" if report.engine_used == "local" else "🤖 AI 解释"
-            self._layout.addWidget(self._section_label(title))
-            expl = QLabel(report.analysis.explanation)
-            expl.setWordWrap(True)
-            expl.setStyleSheet("padding: 8px; background: #f5f5f5; border-radius: 4px;")
-            self._layout.addWidget(expl)
+            self._add_section(lambda t=title: self._section_label(t))
+            self._add_section(self._build_explanation, report.analysis.explanation)
 
         # 性能对比
-        bench_widget = self._build_benchmark_section(report.benchmark)
-        if bench_widget is not None:
-            self._layout.addWidget(bench_widget)
+        self._add_section(self._build_benchmark_section, report.benchmark)
 
         # 索引实测
-        impact_widget = self._build_index_impact_section(report.index_impact)
-        if impact_widget is not None:
-            self._layout.addWidget(impact_widget)
+        self._add_section(self._build_index_impact_section, report.index_impact)
 
         # 撑底
         self._layout.addStretch(1)

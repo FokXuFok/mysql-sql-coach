@@ -353,3 +353,210 @@ def test_nl_status_bar_flags_warnings(app, monkeypatch):
     assert "⚠" in msg
     assert "1 条提示" in msg
     assert shown, "仍应弹出提示框"
+
+
+class _FakeCoach:
+    """替身：不真连库，按键结果返回。"""
+
+    next_ok = True
+    instances = 0
+
+    def __init__(self, config):
+        self.config = config
+        self.db = self
+        self.last_error = "" if _FakeCoach.next_ok else "Access denied for user 'root'"
+        _FakeCoach.instances += 1
+
+    def connect(self):
+        return _FakeCoach.next_ok
+
+    def close(self):
+        pass
+
+
+def test_saved_settings_reload_env_without_restart(app, monkeypatch, tmp_path):
+    """回归测试：设置保存到 .env 后立即生效，不需要关掉程序重开。
+
+    这是「第 4 幕勾选索引实测却没出现实测结果、只能重开程序」的根因：
+    保存后既不重载新值，也不重试数据库连接（mock 状态被永久沿用）。
+    """
+    env = tmp_path / ".env"
+    env.write_text("DB_NAME=test\nMEASURE_INDEX=false\n", encoding="utf-8")
+    monkeypatch.delenv("MEASURE_INDEX", raising=False)
+    _FakeCoach.next_ok = True
+    _FakeCoach.instances = 0
+    monkeypatch.setattr("sql_coach.coach.SQLCoach", _FakeCoach)
+
+    win = MainWindow(config=make_config(), env_path=str(env))
+    assert win.config.measure_index is False
+    assert win.config.mock is True          # 初始配置是 mock
+
+    # 模拟用户勾选「索引实测」并点「保存到 .env」
+    env.write_text("DB_NAME=test\nMEASURE_INDEX=true\n", encoding="utf-8")
+
+    win._reload_after_settings_saved()
+
+    assert win.config.measure_index is True, "保存后新配置必须立即生效"
+    assert win.config.mock is False, "保存后必须重试真实连接，不能沿用 mock"
+    assert _FakeCoach.instances == 1
+    assert "已连接" in win.status_bar.currentMessage()
+
+
+def test_check_db_connection_retries_after_startup_failure(app, monkeypatch):
+    """force_retry=True 时必须忽略 mock 状态重新尝试，并能从 mock 恢复。"""
+    _FakeCoach.next_ok = True
+    _FakeCoach.instances = 0
+    monkeypatch.setattr("sql_coach.coach.SQLCoach", _FakeCoach)
+
+    win = MainWindow(config=make_config())
+    # 默认行为：已经是 mock 就直接返回，不再尝试连接
+    win._check_db_connection()
+    assert _FakeCoach.instances == 0
+
+    win._check_db_connection(force_retry=True)
+    assert _FakeCoach.instances == 1
+    assert win.config.mock is False
+
+
+def test_check_db_connection_shows_real_error(app, monkeypatch):
+    """连库失败时要把真实原因显示出来，而不是只说"已切换到模拟模式"。"""
+    _FakeCoach.next_ok = False
+    monkeypatch.setattr("sql_coach.coach.SQLCoach", _FakeCoach)
+
+    win = MainWindow(config=make_config())
+    shown = []
+    monkeypatch.setattr(win, "_show_db_fallback", lambda m: shown.append(m))
+
+    win._check_db_connection(force_retry=True)
+
+    assert win.config.mock is True
+    assert win.status_bar.currentMessage() == "DB: 模拟模式"
+    assert shown and "Access denied" in shown[0]
+
+
+def _report_with_benchmark_and_impact():
+    """构造一份同时带「性能对比」和「索引实测」的报告。"""
+    from sql_coach.coach import Report
+    from sql_coach.models import (
+        AnalysisResult, BenchmarkResult, Complexity, IndexImpact, SQLInfo,
+    )
+
+    return Report(
+        sql_info=SQLInfo(raw_sql="SELECT * FROM orders WHERE amount>999.5",
+                         sql_type="SELECT", tables=["orders"],
+                         columns=["amount"], where_conditions=["amount>999.5"],
+                         join_tables=[], order_by=[]),
+        explain=None,
+        analysis=AnalysisResult(
+            problems=[], optimized_sql="SELECT amount FROM orders",
+            index_ddls=["CREATE INDEX idx_orders_amount ON orders(amount);"],
+            explanation="本地规则引擎命中规则"),
+        benchmark=BenchmarkResult(original_time=0.041, optimized_time=0.001,
+                                  speedup=41.0, original_rows=100000,
+                                  optimized_rows=50),
+        engine_used="local",
+        complexity=Complexity(level="simple", score=0),
+        index_impact=IndexImpact(
+            before_time=0.041, after_time=0.001, speedup=41.0,
+            applied_ddls=["CREATE INDEX idx_orders_amount ON orders(amount);"],
+            skipped_ddls=[], rolled_back=True, matched_rows=50,
+            total_rows=100000, selectivity=0.0005, recommended=True,
+            verdict="索引有效（实测提速 41.0x），建议采纳"),
+    )
+
+
+def test_report_renders_index_impact_even_if_chart_fails(app, monkeypatch):
+    """回归测试：图表章节渲染失败时，「索引实测」必须仍然出现在报告里。
+
+    打包环境下 matplotlib 相关渲染抛异常时，原先会让整份报告停在「性能对比」，
+    导致「索引实测」永远不出现（表现为"设置里开了索引实测却没有对比"）。
+    """
+    win = MainWindow(config=make_config())
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated chart failure")
+
+    monkeypatch.setattr("gui.widgets.benchmark_chart.BenchmarkChartWidget", boom)
+    win.report_view.set_report(_report_with_benchmark_and_impact())
+
+    from PySide6.QtWidgets import QLabel
+
+    labels = [lbl.text() for lbl in win.report_view._container.findChildren(QLabel)]
+    assert any("索引实测" in t for t in labels), "索引实测章节不应因图表失败而消失"
+    assert any("本节渲染失败" in t for t in labels), "失败章节应给出占位提示"
+    assert any("索引建议" in t for t in labels), "失败章节之前的章节也应保留"
+
+
+def test_analyze_finished_resets_ui_when_render_fails(app, monkeypatch):
+    """渲染抛异常时仍要复位 UI 并更新状态栏，不能一直停在"分析中"。"""
+    import time
+
+    win = MainWindow(config=make_config())
+
+    class _History:
+        def add(self, **kwargs):
+            return "x"
+
+    shown = []
+    monkeypatch.setattr(win, "history", _History())
+    monkeypatch.setattr(win, "_show_message", lambda *a, **k: shown.append(a))
+
+    def boom(report):
+        raise RuntimeError("render boom")
+
+    monkeypatch.setattr(win.report_view, "set_report", boom)
+    win._analyze_start_time = time.perf_counter()
+
+    win._on_analyze_finished(_report_with_benchmark_and_impact())
+
+    msg = win.status_bar.currentMessage()
+    assert "渲染异常" in msg, msg
+    assert win.sql_input.editor.isReadOnly() is False, "UI 必须回到可交互状态"
+    assert shown, "必须弹出渲染失败提示，而不是静默失败"
+
+
+def test_nl_finished_keeps_worker_until_thread_finishes(app):
+    """回归测试：完成槽函数不得在 QThread 真正结束前丢弃 worker 引用。
+
+    否则 QThread 对象会在 run() 尚未返回时被回收，Qt 会直接
+    qFatal("QThread: Destroyed while thread is still running") 终止进程
+    （Windows 异常码 0xC0000409，表现为点「生成 SQL」后程序直接消失）。
+    """
+    from sql_coach.models import NLQuery, NLQueryResult
+
+    win = MainWindow(config=make_config())
+    sentinel = object()
+    win.nl_worker = sentinel                     # 模拟"线程仍在运行"
+
+    result = NLQueryResult(
+        nl_query=NLQuery(intent="select", tables=["users"], columns=[],
+                         conditions=[], aggregates=[], order_by=[], group_by=[]),
+        generated_sql="SELECT city, COUNT(*) FROM users GROUP BY city;",
+        columns=["city", "cnt"], rows=[("北京", 2)],
+    )
+    win._on_nl_finished(result)
+
+    assert win.nl_worker is sentinel, "线程结束前不得丢弃 worker 引用"
+    assert win.nl_input.editor.isReadOnly() is False, "但输入框要立即恢复可用"
+
+    # 线程真正结束后，才由 finished 的槽负责释放
+    win._reset_nl_ui()
+    assert win.nl_worker is None
+
+
+def test_analyze_finished_keeps_worker_until_thread_finishes(app, monkeypatch):
+    """同上的分析路径：完成槽不得提前丢弃 worker 引用。"""
+    win = MainWindow(config=make_config())
+
+    class _History:
+        def add(self, **kwargs):
+            return "x"
+
+    monkeypatch.setattr(win, "history", _History())
+    sentinel = object()
+    win.worker = sentinel
+
+    win._on_analyze_finished(_report_with_benchmark_and_impact())
+
+    assert win.worker is sentinel, "线程结束前不得丢弃 worker 引用"
+    assert win.sql_input.editor.isReadOnly() is False

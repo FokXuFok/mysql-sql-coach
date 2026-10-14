@@ -2,6 +2,7 @@
 """主窗口, 左右分栏组装所有组件。"""
 from __future__ import annotations
 
+import logging
 import time
 from typing import Optional
 
@@ -179,21 +180,32 @@ class MainWindow(QMainWindow):
         clear_sc.activated.connect(self._on_clear)
 
     # ---- 业务逻辑 ----
-    def _check_db_connection(self) -> None:
-        """启动时测试 DB 连通性, 失败则切 mock 模式。"""
-        if self.config.mock:
+    def _check_db_connection(self, force_retry: bool = False) -> None:
+        """测试 DB 连通性, 失败则切 mock 模式。
+
+        Args:
+            force_retry: True 时忽略当前的 mock 状态重新尝试真实连接。
+                必须支持重试——否则一旦启动时连库失败降级为 mock，用户在设置里
+                改好配置并保存后依然回不到真实连接，只能关掉程序重开。
+        """
+        if self.config.mock and not force_retry:
             self.status_bar.showMessage("DB: 模拟模式")
             return
         from sql_coach.coach import SQLCoach
         try:
             coach = SQLCoach(self.config)
             ok = coach.connect()
+            detail = getattr(coach.db, "last_error", "")
             coach.close()
             if ok:
+                self.config.mock = False
                 self.status_bar.showMessage("DB: 已连接")
             else:
                 self.config.mock = True
-                self._show_db_fallback("已切换到模拟模式")
+                msg = "已切换到模拟模式"
+                if detail:
+                    msg += f"\n错误: {detail}"
+                self._show_db_fallback(msg)
                 self.status_bar.showMessage("DB: 模拟模式")
         except Exception as e:
             self.config.mock = True
@@ -247,14 +259,21 @@ class MainWindow(QMainWindow):
         self.worker.error.connect(self._on_analyze_error)
         # QThread 内置 finished 总会发射 -> 作为兜底, 保证 UI 一定回到可交互状态
         self.worker.finished.connect(self._reset_analysis_ui)
-        self.worker.analysis_done.connect(self.worker.deleteLater)
-        self.worker.error.connect(self.worker.deleteLater)
+        # 只能在 finished（线程真正结束）之后再销毁 QThread：
+        # analysis_done 是在 run() 内部发射的，此时线程还没结束，
+        # 那时销毁 QThread 会触发 Qt 的 qFatal("QThread: Destroyed while thread
+        # is still running")，在 Windows 上表现为进程直接消失（0xC0000409）。
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
-    def _reset_analysis_ui(self) -> None:
-        """恢复 UI 到可交互状态。幂等, 可被多个信号调用。"""
+    def _reenable_analysis_ui(self) -> None:
+        """只恢复可交互状态，**不丢弃** worker 引用（引用要留到线程真正结束）。"""
         self.sql_input.set_readonly(False)
         self._analyze_action.setEnabled(True)
+
+    def _reset_analysis_ui(self) -> None:
+        """恢复 UI 到可交互状态并释放 worker（由 QThread.finished 调用）。幂等。"""
+        self._reenable_analysis_ui()
         self.worker = None
 
     def _on_stage_changed(self, stage: str) -> None:
@@ -262,10 +281,19 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(stage_label(stage) + " ...")
 
     def _on_analyze_finished(self, report: Report) -> None:
-        """分析完成: 渲染报告 + 存历史 + 恢复 UI。"""
+        """分析完成: 渲染报告 + 存历史 + 恢复 UI。
+
+        渲染失败也必须走完收尾：否则界面会一直停在"性能对比中 ..."、用户看不到
+        任何错误线索，历史记录也不会写入（排查时极具误导性）。
+        """
         elapsed = (time.perf_counter() - self._analyze_start_time) * 1000
         self.last_report = report
-        self.report_view.set_report(report)
+        render_error = ""
+        try:
+            self.report_view.set_report(report)
+        except Exception as e:  # noqa: BLE001 - 渲染失败不能吞掉收尾逻辑
+            logging.getLogger(__name__).exception("报告渲染失败")
+            render_error = f"{type(e).__name__}: {e}"
 
         # 存入历史
         try:
@@ -277,11 +305,16 @@ class MainWindow(QMainWindow):
         except Exception:
             pass  # 历史记录失败不影响主流程
 
-        self._reset_analysis_ui()
+        self._reenable_analysis_ui()
         engine = "本地规则" if report.engine_used == "local" else report.engine_used
-        self.status_bar.showMessage(
-            f"完成 | {engine} | 耗时 {elapsed/1000:.1f}s"
-        )
+        if render_error:
+            self._show_message("报告渲染失败", render_error, QMessageBox.Warning)
+            self.status_bar.showMessage(
+                f"完成（报告渲染异常）| {engine} | 耗时 {elapsed/1000:.1f}s")
+        else:
+            self.status_bar.showMessage(
+                f"完成 | {engine} | 耗时 {elapsed/1000:.1f}s"
+            )
 
     def _on_analyze_error(self, msg: str) -> None:
         """分析出错: 提示 + 恢复 UI。
@@ -289,7 +322,7 @@ class MainWindow(QMainWindow):
         用**非模态**提示而非 ``QMessageBox.critical``: 后者会进入嵌套事件循环,
         在用户没注意到弹窗时会让整个主窗口"点哪都没反应"(输入框也无法输入)。
         """
-        self._reset_analysis_ui()
+        self._reenable_analysis_ui()
         self._show_message("分析失败", msg, QMessageBox.Critical)
         self.status_bar.showMessage("分析失败")
 
@@ -317,20 +350,31 @@ class MainWindow(QMainWindow):
         self.nl_worker.error.connect(self._on_nl_error)
         # QThread 内置 finished 总会发射 -> 兜底, 保证 UI 一定回到可交互状态
         self.nl_worker.finished.connect(self._reset_nl_ui)
-        self.nl_worker.nl_done.connect(self.nl_worker.deleteLater)
-        self.nl_worker.error.connect(self.nl_worker.deleteLater)
+        # 只在 finished（线程真正结束）之后销毁 QThread。nl_done 是在 run() 内部
+        # 发射的，此时线程尚未结束；那时销毁 QThread 会触发 Qt 的
+        # qFatal("QThread: Destroyed while thread is still running")，
+        # Windows 上表现为进程直接消失（异常码 0xC0000409）。
+        self.nl_worker.finished.connect(self.nl_worker.deleteLater)
         self.nl_worker.start()
 
-    def _reset_nl_ui(self) -> None:
-        """恢复 NL 输入 UI。幂等, 可被多个信号调用。"""
+    def _reenable_nl_ui(self) -> None:
+        """只恢复输入可用性，**不丢弃** worker 引用。
+
+        引用必须保留到线程真正结束（finished）；提前置 None 会让 QThread 对象
+        在线程仍在运行时被回收，从而触发 Qt 的 fail-fast 崩溃（0xC0000409）。
+        """
         self.nl_input.set_readonly(False)
+
+    def _reset_nl_ui(self) -> None:
+        """恢复 NL 输入 UI 并释放 worker（由 QThread.finished 调用）。幂等。"""
+        self._reenable_nl_ui()
         self.nl_worker = None
 
     def _on_nl_finished(self, result) -> None:
         """生成完成: 渲染 SQL 与结果, 提示 warnings / error。"""
         self.sql_display.set_sql(result.generated_sql)
         self.query_result.set_result(result.columns, result.rows)
-        self._reset_nl_ui()
+        self._reenable_nl_ui()
 
         if result.error:
             self._show_message("查询执行失败", result.error, QMessageBox.Critical)
@@ -349,7 +393,7 @@ class MainWindow(QMainWindow):
 
     def _on_nl_error(self, msg: str) -> None:
         """生成出错: 非模态提示 + 恢复 UI。"""
-        self._reset_nl_ui()
+        self._reenable_nl_ui()
         self._show_message("生成失败", msg, QMessageBox.Critical)
         self.status_bar.showMessage("生成失败")
 
@@ -403,14 +447,25 @@ class MainWindow(QMainWindow):
         self.sql_input.editor.setPlainText(sql)
         self.status_bar.showMessage("已从历史填入 SQL")
 
+    def _reload_after_settings_saved(self) -> None:
+        """设置保存到 .env 后立即重载并重试连接，无需重启程序。
+
+        两件事缺一不可：
+        1. ``override_env=True``——否则 .env 里刚写入的新值会被 os.environ 中的
+           旧值挡住（"设置改了要重启才生效"）；
+        2. ``mock=False`` + ``force_retry=True``——否则上次启动失败留下的 mock
+           状态会一直沿用，用户改好配置也回不到真实连接。
+        """
+        self.config = load_config(
+            env_path=self.env_path, mock=False, override_env=True)
+        self.status_bar.showMessage("配置已更新")
+        self._check_db_connection(force_retry=True)
+
     def _on_open_settings(self) -> None:
         """打开设置对话框。"""
         dialog = SettingsDialog(env_path=self.env_path, parent=self)
         if dialog.exec():
-            # 重新加载配置
-            self.config = load_config(env_path=self.env_path, mock=self.config.mock)
-            self.status_bar.showMessage("配置已更新")
-            self._check_db_connection()
+            self._reload_after_settings_saved()
 
     def _on_about(self) -> None:
         """关于对话框。"""
