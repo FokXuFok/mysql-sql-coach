@@ -248,6 +248,7 @@ sql-coach/
 │   ├── db/                 # 数据库连接器 (MySQL + Mock)
 │   ├── engine/             # SQL 解析 + EXPLAIN 结果解析
 │   ├── local/              # 本地规则引擎 (13 条规则 + 复杂度评分 + schema 读取)
+│   ├── nl/                 # 自然语言转 SQL (jieba 分词 + 意图/实体 + 模板生成)
 │   ├── report/             # 性能对比 + 报告格式化
 │   ├── diagnostics/        # 启动环境自检 (检查 + 修复 + 报告)
 │   ├── models.py           # 数据模型 (dataclass)
@@ -264,7 +265,7 @@ sql-coach/
 │   ├── main_window.py      # 主窗口
 │   ├── paths.py            # .env 路径处理 (打包/开发双模式)
 │   ├── widgets/            # 组件 (SQL 输入、EXPLAIN 表格、报告视图、图表、历史、设置、自检)
-│   ├── workers/            # 后台线程 (分析任务)
+│   ├── workers/            # 后台线程 (分析 / NL 生成任务)
 │   └── storage/            # 历史记录存储 + 报告导出
 ├── docs/                   # 文档
 │   ├── api-reference.md    # API 参考文档
@@ -274,7 +275,7 @@ sql-coach/
 ├── sql-coach.spec          # PyInstaller 打包配置 (onedir)
 ├── .github/workflows/      # CI: 三平台并行构建 Release
 ├── docker/                 # Docker 测试环境
-└── tests/                  # 测试 (329 passed)
+└── tests/                  # 测试 (573 passed)
 ```
 
 ## 技术栈
@@ -282,6 +283,7 @@ sql-coach/
 - **GUI**: PySide6 (Qt6) + matplotlib
 - **CLI**: click + rich
 - **SQL 解析**: sqlparse
+- **NL 分词**: jieba（自然语言转 SQL，惰性加载 + 无 jieba 降级）
 - **数据库**: pymysql
 - **AI**: openai SDK (兼容 DeepSeek/OpenAI) + httpx (Ollama)
 - **打包**: PyInstaller (onefile + onedir 双模式, 三平台分发)
