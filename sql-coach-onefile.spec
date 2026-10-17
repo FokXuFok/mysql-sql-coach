@@ -27,7 +27,9 @@ a = Analysis(
     excludes=[
         'IPython', 'jedi', 'prompt_toolkit',
         'pytest', '_pytest', 'tkinter',
-        'unittest', 'pydoc_data', 'test',
+        # 不能排除 unittest：numpy/matplotlib 的画图链路会 import 它，
+        # 排除后打包版渲染「性能对比」图表会抛 ModuleNotFoundError。
+        'pydoc_data', 'test',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
