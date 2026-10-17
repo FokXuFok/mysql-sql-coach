@@ -15,9 +15,10 @@ from sql_coach.models import BenchmarkResult
 _COLOR_ORIGINAL = "#f38ba8"
 _COLOR_FASTER = "#a6e3a1"
 _COLOR_SLOWER = "#f9e2af"
-# 结论文字用深色, 保证在白底上可读 (浅琥珀作文字色对比度不足)
+# 结论文字用深色, 保证在白底上可读 (浅色作文字色对比度不足)
 _TEXT_FASTER = "#2f7d32"
 _TEXT_SLOWER = "#b8860b"
+_TEXT_WORSE = "#c0392b"
 
 # 差异小于该比例时视为测量噪声, 不下"更快/更慢"的结论
 _NOISE_RATIO = 0.10
@@ -88,7 +89,7 @@ class BenchmarkChartWidget(FigureCanvasQTAgg):
             return f"提速 {speedup:.2f}x", _TEXT_FASTER
         if speedup > 1.0 - _NOISE_RATIO:
             return "基本持平（差异在测量噪声范围内）", _TEXT_SLOWER
-        return f"反而慢了 {1.0 / speedup:.2f}x", _COLOR_ORIGINAL
+        return f"反而慢了 {1.0 / speedup:.2f}x", _TEXT_WORSE
 
     # ---------- 主入口 ----------
 
