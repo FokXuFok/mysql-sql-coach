@@ -165,3 +165,34 @@ def test_report_view_shows_index_impact_verdict(app):
     view.set_report(report)
     texts = [w.text() for w in view.findChildren(QLabel)]
     assert any("建议采纳" in t for t in texts)
+
+
+def test_rerender_removes_old_chart_widget(app):
+    """连续渲染两次报告时, 旧图表必须立即从界面上消失。
+
+    历史 bug: `_clear_layout` 只调 `deleteLater()`, 控件在排队删除期间
+    仍是可见子控件, 于是旧图表与新图表叠在一起, 表现为"柱长和数值对不上"。
+    """
+    from gui.widgets.benchmark_chart import BenchmarkChartWidget
+
+    view = ReportView()
+    view.set_report(make_report())
+    QApplication.processEvents()
+    view.set_report(make_report())
+    QApplication.processEvents()
+
+    charts = view.findChildren(BenchmarkChartWidget)
+    assert len(charts) == 1, f"应只剩 1 个图表控件, 实得 {len(charts)}"
+
+
+def test_old_widgets_detached_from_container(app):
+    """清空后容器内不应残留可见子控件。"""
+    view = ReportView()
+    view.set_report(make_report())
+    QApplication.processEvents()
+    view.clear()
+    QApplication.processEvents()
+
+    visible = [w for w in view._container.findChildren(object)
+               if hasattr(w, "isVisible") and w.isVisible()]
+    assert visible == [], f"仍有可见残留控件: {[type(w).__name__ for w in visible]}"

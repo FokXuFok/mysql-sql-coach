@@ -66,11 +66,19 @@ class ReportView(QScrollArea):
         self._layout.addWidget(placeholder)
 
     def _clear_layout(self) -> None:
-        """清空布局中的所有 widget。"""
+        """清空布局中的所有 widget。
+
+        仅 ``deleteLater()`` 不够：它只是**排队**删除，控件在被真正析构前
+        仍是容器的子控件、仍会继续绘制。连续两次渲染时旧图表会与新图表
+        叠在一起，看起来就是"柱长和数值对不上"。因此这里先 hide + 解除
+        父子关系，让它立刻从界面消失，再交给 deleteLater 释放内存。
+        """
         while self._layout.count():
             item = self._layout.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
 
     def _section_label(self, text: str) -> QLabel:
