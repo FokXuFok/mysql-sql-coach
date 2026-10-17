@@ -49,7 +49,9 @@ splash.png
 
 # 比赛提交材料（本地整理，不入库）
 程序设计大赛-作品设计赛道-软件设计-信息工程学院-二次元凶队/
+程序设计大赛-作品设计赛道-软件设计-信息工程学院-二次元凶队.zip
 docs/作品设计报告-*.md
 docs/_capture_gui.py
 docs/_make_intro_docx.py
 docs/_md2pdf.py
+_video_work/
