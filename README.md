@@ -275,7 +275,7 @@ sql-coach/
 ├── sql-coach.spec          # PyInstaller 打包配置 (onedir)
 ├── .github/workflows/      # CI: 三平台并行构建 Release
 ├── docker/                 # Docker 测试环境
-└── tests/                  # 测试 (573 passed)
+└── tests/                  # 测试 (582 passed)
 ```
 
 ## 技术栈
